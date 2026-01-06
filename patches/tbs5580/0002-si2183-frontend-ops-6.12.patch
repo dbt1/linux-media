@@ -1,0 +1,96 @@
+From b756476bce66246c9f32cecf7441fe76d48ca16a Mon Sep 17 00:00:00 2001
+From: Thilo Graf <dbt@novatux.de>
+Date: Tue, 6 Jan 2026 00:25:37 +0100
+Subject: [PATCH] fix(si2183): guard legacy frontend ops for 6.12
+
+Adds version guards and modulation aliases so the demod builds\nagainst modern dvb_frontend APIs.
+---
+ drivers/media/dvb-frontends/si2183.c | 27 ++++++++++++++++++++++++---
+ 1 file changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/media/dvb-frontends/si2183.c b/drivers/media/dvb-frontends/si2183.c
+index a275fe82e..4eec75ac3 100644
+--- a/drivers/media/dvb-frontends/si2183.c
++++ b/drivers/media/dvb-frontends/si2183.c
+@@ -16,6 +16,23 @@
+ #include <media/dvb_frontend.h>
+ #include <linux/firmware.h>
+ #include <linux/i2c-mux.h>
++#include <linux/version.h>
++
++#ifndef APSK_8L
++#define APSK_8L APSK_8_L
++#endif
++#ifndef APSK_16L
++#define APSK_16L APSK_16_L
++#endif
++#ifndef APSK_32L
++#define APSK_32L APSK_32_L
++#endif
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++#define SI2183_HAS_LEGACY_FE_OPS 0
++#else
++#define SI2183_HAS_LEGACY_FE_OPS 1
++#endif
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
+ #define SI2183_USE_I2C_MUX
+@@ -1439,6 +1456,7 @@ static enum dvbfe_algo si2183_get_algo(struct dvb_frontend *fe)
+ 	return DVBFE_ALGO_HW;
+ }
+ 
++#if SI2183_HAS_LEGACY_FE_OPS
+ static int si2183_set_property(struct dvb_frontend *fe,
+ 		u32 cmd, u32 data)
+ {
+@@ -1480,6 +1498,7 @@ static int si2183_set_property(struct dvb_frontend *fe,
+ 
+ 	return ret;
+ }
++#endif
+ 
+ 
+ static int send_diseqc_cmd(struct dvb_frontend *fe,
+@@ -1584,6 +1603,7 @@ static int si2183_diseqc_send_msg(struct dvb_frontend *fe,
+ 	return ret;
+ }
+ 
++#if SI2183_HAS_LEGACY_FE_OPS
+ static void spi_read(struct dvb_frontend *fe, struct ecp3_info *ecp3inf)
+ {
+ 	struct i2c_client *client = fe->demodulator_priv;
+@@ -1625,6 +1645,7 @@ static void eeprom_write(struct dvb_frontend *fe,struct eeprom_info *eepinf)
+ 		dev->write_eeprom(client->adapter,eepinf->reg, eepinf->data);
+ 	return ;
+ }
++#endif
+ 
+ static const struct dvb_frontend_ops si2183_ops = {
+ 	.delsys = {SYS_DVBT, SYS_DVBT2,
+@@ -1672,19 +1693,19 @@ static const struct dvb_frontend_ops si2183_ops = {
+ 	.get_frontend_algo = si2183_get_algo,
+ 	.tune = si2183_tune,
+ 
+-	.set_property		= si2183_set_property,
+-
+ 	.set_tone			= si2183_set_tone,
+ 	.diseqc_send_burst	= si2183_diseqc_send_burst,
+ 	.diseqc_send_master_cmd		= si2183_diseqc_send_msg,
+ #ifndef SI2183_USE_I2C_MUX
+ 	.i2c_gate_ctrl		= i2c_gate_ctrl,
+ #endif
+-
++#if SI2183_HAS_LEGACY_FE_OPS
++	.set_property		= si2183_set_property,
+ 	.spi_read			= spi_read,
+ 	.spi_write			= spi_write,
+ 	.eeprom_read		= eeprom_read,
+ 	.eeprom_write		= eeprom_write,
++#endif
+ };
+ 
+ 
+-- 
+2.47.3
+

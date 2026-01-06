@@ -1,0 +1,25 @@
+From 25aa724723fc34ba8c693ae7486d5488c37bd16e Mon Sep 17 00:00:00 2001
+From: Thilo Graf <dbt@novatux.de>
+Date: Tue, 6 Jan 2026 00:25:25 +0100
+Subject: [PATCH] build(dvb-usb): add dvb-frontends include path
+
+Needed for external module builds to find dvb-pll.h.\nNo system headers are modified.
+---
+ drivers/media/usb/dvb-usb/Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/media/usb/dvb-usb/Makefile b/drivers/media/usb/dvb-usb/Makefile
+index 8b72eeebe..0704ae6e5 100644
+--- a/drivers/media/usb/dvb-usb/Makefile
++++ b/drivers/media/usb/dvb-usb/Makefile
+@@ -140,6 +140,7 @@ obj-$(CONFIG_DVB_USB_TBS5931) += dvb-usb-tbs5931.o
+ dvb-usb-tbs5590-objs = tbs5590.o
+ obj-$(CONFIG_DVB_USB_TBS5590) += dvb-usb-tbs5590.o
+ 
++ccflags-y += -I$(src)/../../dvb-frontends
+ ccflags-y += -I$(srctree)/drivers/media/dvb-frontends/
+ # due to tuner-xc3028
+ ccflags-y += -I$(srctree)/drivers/media/tuners
+-- 
+2.47.3
+

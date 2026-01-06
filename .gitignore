@@ -1,0 +1,12 @@
+/out/
+/linux_media/
+/linux_media.old-*
+/dist/
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+*.cmd

@@ -1,0 +1,26 @@
+From 82334de9db8e947cdbebe2fef3d52aefc0c63202 Mon Sep 17 00:00:00 2001
+From: Thilo Graf <dbt@novatux.de>
+Date: Tue, 6 Jan 2026 00:25:48 +0100
+Subject: [PATCH] fix(av201x): use IS_ENABLED for attach guard
+
+Avoids inline stub when building as an external module.
+---
+ drivers/media/tuners/av201x.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/tuners/av201x.h b/drivers/media/tuners/av201x.h
+index 92f40094d..6e83fb1bd 100644
+--- a/drivers/media/tuners/av201x.h
++++ b/drivers/media/tuners/av201x.h
+@@ -40,7 +40,7 @@ struct av201x_config {
+ 	u32 xtal_freq;
+ };
+ 
+-#if IS_REACHABLE(CONFIG_MEDIA_TUNER_AV201X)
++#if IS_ENABLED(CONFIG_MEDIA_TUNER_AV201X)
+ extern struct dvb_frontend *av201x_attach(struct dvb_frontend *fe,
+ 		struct av201x_config *cfg, struct i2c_adapter *i2c);
+ #else
+-- 
+2.47.3
+
