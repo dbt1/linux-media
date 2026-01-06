@@ -3,7 +3,7 @@
 This repo is a slim wrapper around `tbsdtv/linux_media` to build only the
 modules needed for specific tuners (without a full media_build stack).
 
-Status: profiles `tbs5580` and `t230` (MyGica T230C v2, 0572:c68a).
+Status: profiles `tbs5580`, `t230`, and `t210` (T210 v2.0, often 0572:c68a).
 
 German version: `README.md`
 
@@ -25,6 +25,12 @@ Build (kernel detected via `uname -r`):
 
 ```
 make tbs5580
+```
+
+Or:
+
+```
+make t210
 ```
 
 Result:

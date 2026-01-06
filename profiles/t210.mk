@@ -1,11 +1,12 @@
-# Profile: t230 (MyGica Mini DVB-(T/T2/C) USB Stick T230C v2)
-# Other variants exist (c688/c689/c699). Adjust USB_ID if needed.
-PROFILE_NAME := t230
+# Profile: t210 (DVB-T210 v2.0)
+# Note: Some units report the same USB ID as T230C v2 (0572:c68a).
+# Adjust USB_ID if your stick differs.
+PROFILE_NAME := t210
 
 LINUX_MEDIA_URL := https://github.com/tbsdtv/linux_media.git
 LINUX_MEDIA_REF := bef2e2680
 
-PATCH_DIR := $(PATCHES_DIR)/t230
+PATCH_DIR := $(PATCHES_DIR)/t210
 PATCH_SERIES := $(PATCH_DIR)/series
 
 USB_DIR := drivers/media/usb/dvb-usb-v2

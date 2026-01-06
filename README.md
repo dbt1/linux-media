@@ -5,7 +5,7 @@ English version: `README.en.md`
 Dieses Repo ist ein schlanker Wrapper um `tbsdtv/linux_media`, um gezielt
 Module fuer einzelne Tuner zu bauen (ohne kompletten media_build Stack).
 
-Status: Profile `tbs5580` und `t230` (MyGica T230C v2, 0572:c68a).
+Status: Profile `tbs5580`, `t230` und `t210` (T210 v2.0, ggf. 0572:c68a).
 
 ## Schnellstart (tbs5580)
 
@@ -25,6 +25,12 @@ Build (Kernel automatisch per `uname -r`):
 
 ```
 make tbs5580
+```
+
+Oder:
+
+```
+make t210
 ```
 
 Ergebnis:

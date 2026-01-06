@@ -15,6 +15,9 @@ endif
 ifneq (,$(filter t230,$(MAKECMDGOALS)))
 PROFILE := t230
 endif
+ifneq (,$(filter t210,$(MAKECMDGOALS)))
+PROFILE := t210
+endif
 endif
 
 PROFILE_FILE := $(BASE)/profiles/$(PROFILE).mk
@@ -30,9 +33,9 @@ endif
 OUT_DIST ?= $(OUT_BASE)/dist
 INSTRUCTION_FILE := $(OUT_PROFILE)/INSTALL.txt
 
-USB_DIR := drivers/media/usb/dvb-usb
-FE_DIR := drivers/media/dvb-frontends
-TUNER_DIR := drivers/media/tuners
+USB_DIR ?= drivers/media/usb/dvb-usb
+FE_DIR ?= drivers/media/dvb-frontends
+TUNER_DIR ?= drivers/media/tuners
 
 BASE_CFLAGS := -I$(LINUX_MEDIA)/drivers/media/dvb-frontends \
 	-I$(LINUX_MEDIA)/drivers/media/tuners \
@@ -64,7 +67,7 @@ FIRMWARE ?=
 FIRMWARES ?=
 CHECK_MODULES ?= $(RMMOD_MODULES)
 
-.PHONY: help tbs5580 t230 build fetch apply-patches check-profile \
+.PHONY: help tbs5580 t230 t210 build fetch apply-patches check-profile \
 	check-linux-media check-kdir precheck build-usb build-fe build-tuner \
 	copy-mods artifacts instructions package clean print-vars
 
@@ -72,6 +75,7 @@ help:
 	@printf "Usage:\\n"
 	@printf "  make tbs5580 [KVER=...] [LINUX_MEDIA=...]\\n"
 	@printf "  make t230 [KVER=...] [LINUX_MEDIA=...]\\n"
+	@printf "  make t210 [KVER=...] [LINUX_MEDIA=...]\\n"
 	@printf "  make build PROFILE=<name> [KVER=...]\\n"
 	@printf "  make precheck PROFILE=<name>\\n"
 	@printf "  make fetch PROFILE=<name>\\n"
@@ -80,6 +84,7 @@ help:
 
 tbs5580: build
 t230: build
+t210: build
 
 check-profile:
 	@if [ -z "$(PROFILE)" ]; then \
