@@ -5,7 +5,8 @@ modules needed for specific tuners (without a full media_build stack).
 
 Status: profiles `tbs5580`, `t230`, and `t210` (T210 v2.0, often 0572:c68a).
 
-German version: `README.md`
+German version: `README.de.md`
+Index: `README.md`
 
 ## Quick start (tbs5580)
 
