@@ -71,3 +71,8 @@ Beispiel-Variablen im Profil:
 - `patches/`   Patch-Serien pro Tuner
 - `out/<profil>/`  Build-Artefakte und Logs
 - `out/dist/`  Pakete (tar.xz) pro Profil/KVER
+
+## Lizenz
+
+- Wrapper-Code (Makefile, Profile, Docs): MIT, siehe `LICENSE`
+- Patch-Dateien unter `patches/`: GPL-2.0-only, siehe `LICENSES/GPL-2.0-only.txt`

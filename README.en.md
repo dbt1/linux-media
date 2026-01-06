@@ -71,3 +71,8 @@ Example profile variables:
 - `patches/`   Patch series per tuner
 - `out/<profile>/`  Build artifacts and logs
 - `out/dist/`  Packages (tar.xz) per profile/KVER
+
+## License
+
+- Wrapper code (Makefile, profiles, docs): MIT, see `LICENSE`
+- Patch files under `patches/`: GPL-2.0-only, see `LICENSES/GPL-2.0-only.txt`
