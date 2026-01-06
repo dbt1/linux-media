@@ -38,7 +38,8 @@ Optional precheck (no build):
 make precheck PROFILE=t230
 ```
 
-The check tries to detect whether the device is already handled by the kernel.
+The check tries to detect whether the device is already handled by the kernel
+and reports possible blacklists (modprobe.d, kernel parameters).
 
 ## Important notes
 

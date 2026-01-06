@@ -62,6 +62,7 @@ RMMOD_MODULES ?=
 MODPROBE_DEPS ?=
 FIRMWARE ?=
 FIRMWARES ?=
+CHECK_MODULES ?= $(RMMOD_MODULES)
 
 .PHONY: help tbs5580 t230 build fetch apply-patches check-profile \
 	check-linux-media check-kdir precheck build-usb build-fe build-tuner \
@@ -209,6 +210,57 @@ precheck: check-profile
 		echo "Result: DVB nodes found for this device (build likely not needed)."; \
 	else \
 		echo "Result: no DVB nodes for this device (build may be required)."; \
+	fi; \
+	echo "Blacklist checks:"; \
+	mods="$(CHECK_MODULES)"; \
+	if [ -z "$$mods" ]; then \
+		echo "  (no module list)"; \
+	else \
+		cmdline=$$(cat /proc/cmdline); \
+		bl_line=$$(printf "%s" "$$cmdline" | tr ' ' '\n' | \
+			grep -E '^(module_blacklist|modprobe.blacklist)=' || true); \
+		if [ -n "$$bl_line" ]; then \
+			bl_vals=$$(printf "%s\n" "$$bl_line" | \
+				sed -E 's/^[^=]+=//; s/,/ /g'); \
+			hit=""; \
+			for m in $$mods; do \
+				for b in $$bl_vals; do \
+					if [ "$$m" = "$$b" ]; then \
+						hit="$$hit $$m"; \
+					fi; \
+				done; \
+			done; \
+			if [ -n "$$hit" ]; then \
+				echo "  kernel cmdline blacklisted:$$hit"; \
+			else \
+				echo "  kernel cmdline blacklisted: (none)"; \
+			fi; \
+		else \
+			echo "  kernel cmdline blacklisted: (none)"; \
+		fi; \
+		conf_dirs="/etc/modprobe.d /usr/lib/modprobe.d /lib/modprobe.d /run/modprobe.d"; \
+		any_hit=0; \
+		for d in $$conf_dirs; do \
+			[ -d "$$d" ] || continue; \
+			for m in $$mods; do \
+				if command -v rg >/dev/null 2>&1; then \
+					if rg -n "^[[:space:]]*(blacklist[[:space:]]+$$m|install[[:space:]]+$$m[[:space:]]+/bin/(false|true))" "$$d" >/dev/null 2>&1; then \
+						echo "  $$m: matches in $$d"; \
+						rg -n "^[[:space:]]*(blacklist[[:space:]]+$$m|install[[:space:]]+$$m[[:space:]]+/bin/(false|true))" "$$d"; \
+						any_hit=1; \
+					fi; \
+				else \
+					if grep -En "^[[:space:]]*(blacklist[[:space:]]+$$m|install[[:space:]]+$$m[[:space:]]+/bin/(false|true))" "$$d" >/dev/null 2>&1; then \
+						echo "  $$m: matches in $$d"; \
+						grep -En "^[[:space:]]*(blacklist[[:space:]]+$$m|install[[:space:]]+$$m[[:space:]]+/bin/(false|true))" "$$d"; \
+						any_hit=1; \
+					fi; \
+				fi; \
+			done; \
+		done; \
+		if [ "$$any_hit" -eq 0 ]; then \
+			echo "  modprobe.d blacklists: (none)"; \
+		fi; \
 	fi
 
 build-usb:

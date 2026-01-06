@@ -38,7 +38,8 @@ Optionaler Vorab-Check (kein Build):
 make precheck PROFILE=t230
 ```
 
-Der Check versucht zu erkennen, ob das Geraet bereits vom Kernel genutzt wird.
+Der Check versucht zu erkennen, ob das Geraet bereits vom Kernel genutzt wird
+und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
 
 ## Wichtige Hinweise
 
