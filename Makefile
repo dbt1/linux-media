@@ -12,6 +12,9 @@ ifeq ($(PROFILE),)
 ifneq (,$(filter tbs5580,$(MAKECMDGOALS)))
 PROFILE := tbs5580
 endif
+ifneq (,$(filter t230,$(MAKECMDGOALS)))
+PROFILE := t230
+endif
 endif
 
 PROFILE_FILE := $(BASE)/profiles/$(PROFILE).mk
@@ -57,20 +60,25 @@ OUTPUT_MODULES := $(USB_MODULES) $(FE_MODULES) $(TUNER_MODULES)
 INSMOD_FILES ?=
 RMMOD_MODULES ?=
 MODPROBE_DEPS ?=
+FIRMWARE ?=
+FIRMWARES ?=
 
-.PHONY: help tbs5580 build fetch apply-patches check-profile check-linux-media \
-	check-kdir build-usb build-fe build-tuner copy-mods artifacts \
-	instructions package clean print-vars
+.PHONY: help tbs5580 t230 build fetch apply-patches check-profile \
+	check-linux-media check-kdir precheck build-usb build-fe build-tuner \
+	copy-mods artifacts instructions package clean print-vars
 
 help:
 	@printf "Usage:\\n"
 	@printf "  make tbs5580 [KVER=...] [LINUX_MEDIA=...]\\n"
+	@printf "  make t230 [KVER=...] [LINUX_MEDIA=...]\\n"
 	@printf "  make build PROFILE=<name> [KVER=...]\\n"
+	@printf "  make precheck PROFILE=<name>\\n"
 	@printf "  make fetch PROFILE=<name>\\n"
 	@printf "  make apply-patches PROFILE=<name>\\n"
 	@printf "  make package PROFILE=<name>\\n"
 
 tbs5580: build
+t230: build
 
 check-profile:
 	@if [ -z "$(PROFILE)" ]; then \
@@ -128,6 +136,81 @@ apply-patches: check-profile check-linux-media
 build: check-profile check-linux-media check-kdir build-usb build-fe build-tuner \
 	copy-mods artifacts instructions
 
+precheck: check-profile
+	@set -eu; \
+	if [ -z "$(USB_ID)" ]; then \
+		echo "USB_ID not set in profile"; \
+		exit 2; \
+	fi; \
+	usb_id="$(USB_ID)"; \
+	vid=$${usb_id%%:*}; \
+	pid=$${usb_id##*:}; \
+	echo "USB_ID: $$vid:$$pid"; \
+	if lsusb -d "$$vid:$$pid" >/dev/null 2>&1; then \
+		echo "Device present: yes"; \
+	else \
+		echo "Device present: no"; \
+	fi; \
+	alias_file="/lib/modules/$(KVER)/modules.alias"; \
+	if [ -f "$$alias_file" ]; then \
+		echo "In-tree alias matches:"; \
+		alias_lines=""; \
+		if command -v rg >/dev/null 2>&1; then \
+			alias_lines=$$(rg -ni "v$${vid}p$${pid}" "$$alias_file" || true); \
+		else \
+			alias_lines=$$(grep -ni "v$${vid}p$${pid}" "$$alias_file" || true); \
+		fi; \
+		if [ -n "$$alias_lines" ]; then \
+			printf "%s\\n" "$$alias_lines"; \
+			alias_mods=$$(printf "%s\\n" "$$alias_lines" | cut -d: -f2- | \
+				awk '{print $$NF}' | sort -u | tr '\\n' ' '); \
+			if [ -n "$$alias_mods" ]; then \
+				echo "Suggested modprobe (in-tree): $$alias_mods"; \
+			fi; \
+		else \
+			echo "  (none)"; \
+		fi; \
+	else \
+		echo "modules.alias not found: $$alias_file"; \
+	fi; \
+	found_paths=""; \
+	for d in /sys/bus/usb/devices/*; do \
+		[ -f "$$d/idVendor" ] || continue; \
+		[ -f "$$d/idProduct" ] || continue; \
+		if [ "$$(cat $$d/idVendor)" = "$$vid" ] && \
+		   [ "$$(cat $$d/idProduct)" = "$$pid" ]; then \
+			found_paths="$$found_paths $$d"; \
+		fi; \
+	done; \
+	if [ -z "$$found_paths" ]; then \
+		echo "USB sysfs: no matching device path found"; \
+	else \
+		for d in $$found_paths; do \
+			echo "USB sysfs: $$d"; \
+			if [ -L "$$d/driver" ]; then \
+				echo "Driver bound: $$(basename "$$(readlink "$$d/driver")")"; \
+			else \
+				echo "Driver bound: (none)"; \
+			fi; \
+		done; \
+	fi; \
+	dvb_for_dev=0; \
+	for d in $$found_paths; do \
+		d_real=$$(readlink -f "$$d"); \
+		for dvb in /sys/class/dvb/*/device; do \
+			[ -e "$$dvb" ] || continue; \
+			dvb_real=$$(readlink -f "$$dvb"); \
+			case "$$dvb_real" in \
+				$$d_real/*) dvb_for_dev=1 ;; \
+			esac; \
+		done; \
+	done; \
+	if [ "$$dvb_for_dev" -eq 1 ]; then \
+		echo "Result: DVB nodes found for this device (build likely not needed)."; \
+	else \
+		echo "Result: no DVB nodes for this device (build may be required)."; \
+	fi
+
 build-usb:
 	@if [ -n "$(USB_MODULES)" ]; then \
 		$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(USB_DIR)" $(USB_KCONFIG) \
@@ -180,13 +263,26 @@ instructions:
 	@printf "Kernel: %s\n" "$(KVER)" >> "$(INSTRUCTION_FILE)"
 	@printf "Linux media: %s @ %s\n" "$(LINUX_MEDIA_URL)" "$(LINUX_MEDIA_REF)" \
 		>> "$(INSTRUCTION_FILE)"
-	@printf "Firmware: %s\n" "$(FIRMWARE)" >> "$(INSTRUCTION_FILE)"
+	@if [ -n "$(FIRMWARES)" ]; then \
+		printf "Firmware: (see prerequisites)\n" >> "$(INSTRUCTION_FILE)"; \
+	else \
+		printf "Firmware: %s\n" "$(FIRMWARE)" >> "$(INSTRUCTION_FILE)"; \
+	fi
 	@printf "USB ID: %s\n" "$(USB_ID)" >> "$(INSTRUCTION_FILE)"
 	@printf "\nPrerequisites:\n" >> "$(INSTRUCTION_FILE)"
 	@printf "  - Kernel version must match exactly (vermagic).\n" \
 		>> "$(INSTRUCTION_FILE)"
-	@printf "  - Firmware must exist at /lib/firmware/%s.\n" "$(FIRMWARE)" \
-		>> "$(INSTRUCTION_FILE)"
+	@if [ -n "$(FIRMWARES)" ]; then \
+		echo "  - Firmware must include one of:" >> "$(INSTRUCTION_FILE)"; \
+		for f in $(FIRMWARES); do \
+			echo "      /lib/firmware/$$f" >> "$(INSTRUCTION_FILE)"; \
+		done; \
+	elif [ -n "$(FIRMWARE)" ]; then \
+		printf "  - Firmware must exist at /lib/firmware/%s.\n" "$(FIRMWARE)" \
+			>> "$(INSTRUCTION_FILE)"; \
+	else \
+		echo "  - Firmware: (not specified)" >> "$(INSTRUCTION_FILE)"; \
+	fi
 	@printf "  - Secure Boot: unsigned modules must be allowed.\n" \
 		>> "$(INSTRUCTION_FILE)"
 	@printf "\nDevice check:\n" >> "$(INSTRUCTION_FILE)"

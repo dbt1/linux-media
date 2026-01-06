@@ -3,7 +3,7 @@
 This repo is a slim wrapper around `tbsdtv/linux_media` to build only the
 modules needed for specific tuners (without a full media_build stack).
 
-Status: base profile `tbs5580` (works on Debian 13 / kernel 6.12.57).
+Status: profiles `tbs5580` and `t230` (MyGica T230C v2, 0572:c68a).
 
 German version: `README.md`
 
@@ -31,6 +31,14 @@ Result:
 - Modules are placed under `out/<profile>/`
 - Package: `out/dist/tbs5580-k<KVER>.tar.xz` via `make package PROFILE=tbs5580`
 - Instructions inside the package: `INSTALL.txt` (English)
+
+Optional precheck (no build):
+
+```
+make precheck PROFILE=t230
+```
+
+The check tries to detect whether the device is already handled by the kernel.
 
 ## Important notes
 
