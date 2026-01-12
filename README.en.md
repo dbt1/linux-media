@@ -54,6 +54,20 @@ and reports possible blacklists (modprobe.d, kernel parameters).
 - Modules are kernel-specific and only valid for the exact same KVER.
 - Secure Boot: unsigned modules must be allowed.
 
+## Kernel update (rebuild)
+
+After a kernel update you must rebuild the modules.
+
+```
+KVER=$(uname -r)
+make package PROFILE=tbs5580 KVER=$KVER
+make package PROFILE=t230  KVER=$KVER
+make package PROFILE=t210  KVER=$KVER
+```
+
+Note: kernel headers for the running kernel must be installed
+(`linux-headers-$KVER`).
+
 ## Add a new tuner profile
 
 1. Create `profiles/<name>.mk`

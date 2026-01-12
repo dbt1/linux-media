@@ -54,6 +54,20 @@ und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
 - Module sind kernel-spezifisch und gelten nur fuer den exakt gleichen KVER.
 - Secure Boot: Unsigned Modules muessen erlaubt sein.
 
+## Kernel-Update (Rebuild)
+
+Nach einem Kernel-Update muessen die Module neu gebaut werden.
+
+```
+KVER=$(uname -r)
+make package PROFILE=tbs5580 KVER=$KVER
+make package PROFILE=t230  KVER=$KVER
+make package PROFILE=t210  KVER=$KVER
+```
+
+Hinweis: Kernel-Header muessen zum laufenden Kernel installiert sein
+(`linux-headers-$KVER`).
+
 ## Ein neues Tuner-Profil hinzufuegen
 
 1. `profiles/<name>.mk` anlegen
