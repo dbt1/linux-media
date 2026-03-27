@@ -65,6 +65,13 @@ make package PROFILE=t230  KVER=$KVER
 make package PROFILE=t210  KVER=$KVER
 ```
 
+For `tbs5580` there is also a short helper script in the repo:
+
+```
+./scripts/tbs5580/rebuild.sh
+sudo systemctl restart tbs5580-modules.service
+```
+
 Note: kernel headers for the running kernel must be installed
 (`linux-headers-$KVER`).
 
@@ -84,8 +91,11 @@ Example profile variables:
 
 - `profiles/`  Profiles per tuner
 - `patches/`   Patch series per tuner
-- `out/<profile>/`  Build artifacts and logs
+- `scripts/`  Version-controlled helpers, e.g. `scripts/tbs5580/rebuild.sh`
+- `out/<profile>/`  Generated build artifacts, loaders, and logs
 - `out/dist/`  Packages (tar.xz) per profile/KVER
+
+Details for helper-script placement live in `scripts/README.md`.
 
 ## License
 
