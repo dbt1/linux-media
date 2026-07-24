@@ -75,6 +75,63 @@ sudo systemctl restart tbs5580-modules.service
 Hinweis: Kernel-Header muessen zum laufenden Kernel installiert sein
 (`linux-headers-$KVER`).
 
+## Symptome eines fehlenden Rebuilds
+
+Nach einem Kernel-Update ohne Rebuild:
+
+- `/dev/dvb` fehlt komplett, Neutrino startet ohne Tuner
+- `systemctl status tbs5580-modules.service` -> `failed`, ExecStart Exit 1
+- `load-tbs5580.sh` bricht in `check_vermagic` ab: `vermagic mismatch for <KVER>`
+- `lsmod` zeigt nur `dvb_core` (ggf. `si2157`), kein `dvb_usb_tbs5580`
+- `modinfo -F vermagic out/<profil>/*.ko` != `uname -r`
+
+Das ist kein Treiberdefekt: Der Loader verweigert bewusst das Laden inkompatibler
+Module. Der Fix ist der Rebuild oben, nicht `rmmod`/`modprobe`.
+
+## Rebuild automatisieren (Vorschlaege, noch nicht umgesetzt)
+
+Status: offen (Stand 2026-07-12). Der Rebuild ist heute manuell. Folge: Der Tuner
+ist nach jedem Kernel-Update weg, bis jemand ihn von Hand neu baut.
+
+### Voraussetzung fuer beide Optionen: Header-Metapaket
+
+`linux-image-amd64` ist installiert, `linux-headers-amd64` nicht. Neue Kernel
+kommen also automatisch, die passenden Header nicht. Damit ist nach einem Update
+nicht einmal ein Rebuild moeglich, bis die Header nachinstalliert sind.
+
+```
+sudo apt install linux-headers-amd64
+```
+
+Das ist unabhaengig von Option A/B sinnvoll und Voraussetzung fuer beide.
+
+### Option A: DKMS (robust)
+
+Das Kernel-Update baut die Module automatisch mit, auch bei unbeaufsichtigten
+apt-Upgrades, und erlaubt Modulsignatur fuer Secure Boot.
+
+- Braucht ein `dkms.conf` je Profil und die Sourcen unter `/usr/src/<name>-<ver>`
+- Bricht mit dem Repo-Prinzip "keine Installation nach `/lib/modules`"
+- `tbs5580-modules.service` und `load-tbs5580.sh` wuerden entfallen (`modprobe` genuegt)
+
+### Option B: Kernel-Postinst-Hook (leichtgewichtig)
+
+Behaelt das Repo-Prinzip (Module bleiben in `out/`) und ruft nur den vorhandenen
+Rebuild auf. Skizze `/etc/kernel/postinst.d/zz-linux-media`:
+
+```
+#!/bin/sh
+set -e
+KVER="$1"
+[ -n "$KVER" ] || exit 0
+[ -d "/lib/modules/$KVER/build" ] || exit 0
+su - tg -c "KVER=$KVER /home/tg/sources/linux-media/scripts/tbs5580/rebuild.sh"
+```
+
+- Laeuft als root und muss fuer den Build in den User-Kontext wechseln
+- Schlaegt still fehl, wenn die Header fehlen (siehe Voraussetzung oben)
+- Keine Modulsignatur, Secure Boot bleibt Handarbeit
+
 ## Ein neues Tuner-Profil hinzufuegen
 
 1. `profiles/<name>.mk` anlegen
