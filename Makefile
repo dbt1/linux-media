@@ -33,31 +33,7 @@ endif
 OUT_DIST ?= $(OUT_BASE)/dist
 INSTRUCTION_FILE := $(OUT_PROFILE)/INSTALL.txt
 
-USB_DIR ?= drivers/media/usb/dvb-usb
-FE_DIR ?= drivers/media/dvb-frontends
-TUNER_DIR ?= drivers/media/tuners
-
-BASE_CFLAGS := -I$(LINUX_MEDIA)/drivers/media/dvb-frontends \
-	-I$(LINUX_MEDIA)/drivers/media/tuners \
-	-I$(LINUX_MEDIA)/drivers/media/common \
-	-I$(LINUX_MEDIA)/$(USB_DIR)
-
-PROFILE_CFLAGS ?=
-USB_CFLAGS ?=
-FE_CFLAGS ?=
-TUNER_CFLAGS ?=
-
-USB_EXTRA_CFLAGS := $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(USB_CFLAGS)
-FE_EXTRA_CFLAGS := $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(FE_CFLAGS)
-TUNER_EXTRA_CFLAGS := $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(TUNER_CFLAGS)
-
-USB_MODULES ?=
-FE_MODULES ?=
-TUNER_MODULES ?=
-
-USB_KCONFIG ?=
-FE_KCONFIG ?=
-TUNER_KCONFIG ?=
+include $(BASE)/mk/build-modules.mk
 
 OUTPUT_MODULES := $(USB_MODULES) $(FE_MODULES) $(TUNER_MODULES)
 INSMOD_FILES ?=
@@ -68,8 +44,8 @@ FIRMWARES ?=
 CHECK_MODULES ?= $(RMMOD_MODULES)
 
 .PHONY: help tbs5580 t230 t210 build fetch apply-patches check-profile \
-	check-linux-media check-kdir precheck build-usb build-fe build-tuner \
-	copy-mods artifacts instructions package clean print-vars
+	check-linux-media check-kdir precheck \
+	copy-mods artifacts instructions package print-vars
 
 help:
 	@printf "Usage:\\n"
@@ -268,30 +244,6 @@ precheck: check-profile
 		fi; \
 	fi
 
-build-usb:
-	@if [ -n "$(USB_MODULES)" ]; then \
-		$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(USB_DIR)" $(USB_KCONFIG) \
-			EXTRA_CFLAGS="$(USB_EXTRA_CFLAGS)" $(USB_MODULES); \
-	else \
-		echo "USB_MODULES empty, skipping"; \
-	fi
-
-build-fe:
-	@if [ -n "$(FE_MODULES)" ]; then \
-		$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(FE_DIR)" $(FE_KCONFIG) \
-			EXTRA_CFLAGS="$(FE_EXTRA_CFLAGS)" $(FE_MODULES); \
-	else \
-		echo "FE_MODULES empty, skipping"; \
-	fi
-
-build-tuner:
-	@if [ -n "$(TUNER_MODULES)" ]; then \
-		$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(TUNER_DIR)" $(TUNER_KCONFIG) \
-			EXTRA_CFLAGS="$(TUNER_EXTRA_CFLAGS)" $(TUNER_MODULES); \
-	else \
-		echo "TUNER_MODULES empty, skipping"; \
-	fi
-
 copy-mods:
 	@mkdir -p "$(OUT_PROFILE)"
 	@for m in $(USB_MODULES); do \
@@ -385,11 +337,6 @@ package: build
 	@tar -C "$(OUT_PROFILE)" -cJf "$(OUT_DIST)/$(PROFILE)-k$(KVER).tar.xz" \
 		$(OUTPUT_MODULES) artifacts.txt INSTALL.txt
 	@echo "Wrote $(OUT_DIST)/$(PROFILE)-k$(KVER).tar.xz"
-
-clean:
-	@$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(USB_DIR)" clean
-	@$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(FE_DIR)" clean
-	@$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(TUNER_DIR)" clean
 
 print-vars:
 	@echo "PROFILE=$(PROFILE)"
