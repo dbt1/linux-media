@@ -21,6 +21,9 @@ TUNER_MODULES := si2157.ko
 TUNER_KCONFIG := CONFIG_MEDIA_TUNER_SI2157=m
 
 FIRMWARES := dvb-demod-si2168-a20-01.fw dvb-demod-si2168-a30-01.fw dvb-demod-si2168-b40-01.fw dvb-demod-si2168-d60-01.fw
+FIRMWARE_NOTE := The Si2168 firmware is not shipped here. Some
+FIRMWARE_NOTE += distributions carry it in a non-free firmware package;
+FIRMWARE_NOTE += otherwise it has to come from the vendor.
 USB_ID := 0572:c68a
 
 INSMOD_FILES := dvb_usb_v2.ko dvb-usb-dvbsky.ko si2168.ko si2157.ko

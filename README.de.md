@@ -74,11 +74,8 @@ und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
 
 **Mit DKMS ist dieser Abschnitt gegenstandslos** -- siehe *Rebuild
 automatisieren (DKMS)* weiter unten. Er gilt nur noch fuer Hosts, die den
-`out/`-Tarball-Weg benutzen; dort ist `tbs5580-modules.service` aktiv.
-Auf einem DKMS-Host ist der Service deaktiviert und wuerde nach einem
-Kernel-Update wieder den vermagic-Fehler liefern.
-
-Nach einem Kernel-Update muessen die Module dann von Hand neu gebaut werden.
+`out/`-Tarball-Weg benutzen; dort muessen die Module nach einem Kernel-Update
+von Hand neu gebaut und neu geladen werden.
 
 ```
 KVER=$(uname -r)
@@ -91,8 +88,11 @@ Fuer `tbs5580` gibt es auch einen kurzen Helfer im Repo:
 
 ```
 ./scripts/tbs5580/rebuild.sh
-sudo systemctl restart tbs5580-modules.service
 ```
+
+Die Lade- und Entlade-Kommandos zum jeweiligen Build stehen in der
+mitgenerierten `out/<profil>/INSTALL.txt`. Wer noch die Systemd-Unit einer
+aelteren Fassung dieses Repos benutzt, startet statt dessen sie neu.
 
 Hinweis: Kernel-Header muessen zum laufenden Kernel installiert sein
 (`linux-headers-$KVER`).
@@ -102,10 +102,14 @@ Hinweis: Kernel-Header muessen zum laufenden Kernel installiert sein
 Nach einem Kernel-Update ohne Rebuild:
 
 - `/dev/dvb` fehlt komplett, Neutrino startet ohne Tuner
-- `systemctl status tbs5580-modules.service` -> `failed`, ExecStart Exit 1
-- `load-tbs5580.sh` bricht in `check_vermagic` ab: `vermagic mismatch for <KVER>`
 - `lsmod` zeigt nur `dvb_core` (ggf. `si2157`), kein `dvb_usb_tbs5580`
 - `modinfo -F vermagic out/<profil>/*.ko` != `uname -r`
+
+Auf Hosts, die noch nach der alten Anleitung eingerichtet sind, zusaetzlich:
+`systemctl status tbs5580-modules.service` -> `failed` mit ExecStart Exit 1,
+und `load-tbs5580.sh` bricht in `check_vermagic` ab (`vermagic mismatch for
+<KVER>`). Unit und Loader stammen aus einer aelteren Fassung dieses Repos und
+werden hier nicht mehr erzeugt.
 
 Das ist kein Treiberdefekt: Der Loader verweigert bewusst das Laden inkompatibler
 Module. Der Fix ist der Rebuild oben, nicht `rmmod`/`modprobe`.
@@ -117,8 +121,8 @@ automatisch mit, auch bei unbeaufsichtigten apt-Upgrades -- solange die Quellen
 gegen die neue Kernel-API bauen. Ein API-Bruch (etwa bei einem Sprung auf eine
 neue Debian-Version) braucht wie bei jedem Out-of-Tree-Treiber nachgezogene
 Quellen; DKMS scheitert dann still und der Tuner fehlt. `modprobe` und udev
-laden sie dann selbst -- `tbs5580-modules.service` und `load-tbs5580.sh` werden
-nicht mehr gebraucht.
+laden die Module selbst -- die Systemd-Unit und das Loader-Skript aelterer
+Fassungen dieses Repos werden nicht mehr gebraucht und nicht mehr erzeugt.
 
 ### Voraussetzung: Header-Metapaket
 
@@ -183,11 +187,14 @@ Maintainer-Feld und Version lassen sich beim Bauen setzen:
 make dkms-deb PROFILE=tbs5580 DEB_MAINTAINER='Name <mail@example.org>'
 ```
 
-Ohne Angabe wird der Hostname verwendet. Das Paket ist reproduzierbar: das
-Changelog-Datum stammt aus `SOURCE_DATE_EPOCH` bzw. dem letzten Commit, nicht
-aus der Uhr. Die Tuner-Firmware ist proprietaer und darf
-nicht mitgeliefert werden; das `postinst` warnt bei Abwesenheit, Details in
-`README.Debian`.
+Ohne Angabe steht `linux-media packaging <linux-media@invalid>` im Paket --
+bewusst eine feste, nicht aufloesbare Adresse und nicht der Hostname, damit
+zwei Rechner aus derselben Quelle dasselbe Paket bauen. Das Paket ist
+reproduzierbar: das Changelog-Datum stammt aus `SOURCE_DATE_EPOCH` bzw. dem
+letzten Commit und wird in UTC formatiert, nicht aus der Uhr und nicht aus der
+Zeitzone. Ohne Git-Kontext und ohne `SOURCE_DATE_EPOCH` bricht `dkms-deb` ab,
+statt heimlich die Uhr zu nehmen. Firmware liefert das Paket keine mit; das
+`postinst` warnt bei Abwesenheit, Herkunft je Tuner in `README.Debian`.
 
 Die Debian-Vorlagen liegen unter `packaging/debian/` und werden beim Bauen mit
 Profil, Version, Maintainer und Firmwareliste gefuellt.
@@ -209,12 +216,21 @@ System und bleibt Handarbeit.
 
 DKMS installiert nach `/lib/modules/<KVER>/updates/dkms/`. Das gibt das
 urspruengliche Prinzip "keine Installation nach `/lib/modules`" bewusst auf.
-`updates/dkms` rangiert vor `kernel/`, die Module ueberschreiben also
-gleichnamige In-Tree-Module fuer *alle* Geraete, die sie nutzen. Bei
-`tbs5580` betrifft das nur `dvb-usb` (`si2183` und `av201x` gibt es in-tree
+
+Existiert ein gleichnamiges In-Tree-Modul, laesst DKMS es nicht einfach in der
+Suchreihenfolge hinter sich: es *verschiebt* die Originaldatei nach
+`/var/lib/dkms/<paket>/original_module/` und setzt den eigenen Build an ihre
+Stelle (`dkms status` meldet dann "Original modules exist"). Das
+out-of-tree-Modul bedient danach *alle* Geraete, die es nutzen, nicht nur
+diesen Tuner; beim Entfernen des Pakets legt DKMS das Original zurueck.
+Geht der DKMS-Zustand verloren, ist das Original weg -- an `dvb-usb`
+haengen rund 25 In-Tree-Treiber.
+
+Bei `tbs5580` betrifft das nur `dvb-usb` (`si2183` und `av201x` gibt es in-tree
 nicht). Bei `t230`/`t210` sind es alle vier: `dvb_usb_v2`, `dvb-usb-dvbsky`,
 `si2168` und `si2157`. Auf einem Host mit weiterer DVB-Hardware vorher
-pruefen; die generierte `README.Debian` nennt die Liste je Profil.
+pruefen; die generierte `README.Debian` nennt die mitgelieferten Module je
+Profil -- welche davon tatsaechlich etwas verdraengen, haengt vom Kernel ab.
 
 Der `out/`-Tarball-Weg (`make package`) bleibt unveraendert als Fallback fuer
 Hosts ohne DKMS.
@@ -246,7 +262,7 @@ Beispiel-Variablen im Profil:
 - `packaging/debian/`  Vorlagen fuer das DKMS-`.deb`
 - `scripts/`   Versionierte Helfer, z. B. `scripts/tbs5580/rebuild.sh`
 - `VERSION`    Version des DKMS-Pakets
-- `out/<profil>/`  Generierte Build-Artefakte, Loader und Logs
+- `out/<profil>/`  Generierte Build-Artefakte und Logs
 - `out/dkms/`  Generierte DKMS-Quellbaeume pro Profil/Version
 - `out/dist/`  Pakete (tar.xz pro Profil/KVER, `.deb` pro Profil/Version)
 

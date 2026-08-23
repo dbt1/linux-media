@@ -4,17 +4,21 @@ set -e
 FIRMWARE="@FIRMWARE_FILES@"
 
 if [ "$1" = "configure" ] && [ -n "$FIRMWARE" ]; then
-	missing=""
+	found=""
 	for f in $FIRMWARE; do
-		if [ -f "/lib/firmware/$f" ]; then
-			missing=""
-			break
-		fi
-		missing="$missing $f"
+		# The kernel loader accepts a compressed copy where it was
+		# built with CONFIG_FW_LOADER_COMPRESS, which Debian enables.
+		for c in "" .xz .zst; do
+			if [ -f "/lib/firmware/$f$c" ]; then
+				found=yes
+				break
+			fi
+		done
+		[ -z "$found" ] || break
 	done
-	if [ -n "$missing" ]; then
+	if [ -z "$found" ]; then
 		echo "@PACKAGE@: no usable firmware found in /lib/firmware." >&2
-		echo "@PACKAGE@: it is proprietary and cannot be shipped here." >&2
+		echo "@PACKAGE@: this package does not ship firmware." >&2
 		echo "@PACKAGE@: the tuner will not create /dev/dvb without one of:" >&2
 		for f in $FIRMWARE; do
 			echo "@PACKAGE@:   $f" >&2

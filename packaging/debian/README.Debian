@@ -1,33 +1,31 @@
-@PACKAGE@ for Debian
-====================
+Debian packaging notes
+======================
 
 Firmware
 --------
 
-This package does not ship tuner firmware. The vendor firmware is proprietary
-and carries no redistribution grant, so it cannot be part of this package. The
-administrator has to install it.
+This package ships no tuner firmware. The administrator has to install it.
 
 The @PROFILE@ profile needs one of: @FIRMWARE_LIST@
 
 Place the file in /lib/firmware/ and reload the module, or replug the device.
+A compressed copy (.fw.xz or .fw.zst) works too on kernels built with firmware
+decompression, which is the Debian default.
 
-Where to get it depends on the tuner. The Si2168 firmware used by the DVB-T/C
-sticks is packaged by Debian in firmware-misc-nonfree. The TBS firmware
-(dvb-usb-id5580.fw and friends) is not in any distribution package and has to
-come from the vendor.
+@FIRMWARE_NOTE@
 
-Module override
----------------
+Modules this package installs
+-----------------------------
 
-DKMS installs into /lib/modules/<kernel>/updates/dkms/, which takes precedence
-over the in-tree modules of the same name. For this profile that affects:
-@OVERRIDE_LIST@
+DKMS installs into /lib/modules/<kernel>/updates/dkms/:
+@MODULE_LIST@
 
-If a name above also exists in your running kernel, the out-of-tree version
-replaces it for *all* devices that use it, not only for this tuner. On a host
-with other DVB hardware, check that those devices still work after installing
-this package.
+Not all of these exist in a stock kernel. Where one does, DKMS moves the
+in-tree file aside into /var/lib/dkms/@MODULE@/original_module/ and puts this
+build in its place, so the out-of-tree version then serves *all* devices that
+use that module, not only this tuner. Removing the package puts the original
+back. On a host with other DVB hardware, check that those devices still work
+after installing this package.
 
 Profiles that build the same modules
 ------------------------------------

@@ -19,6 +19,10 @@ TUNER_KCONFIG := CONFIG_MEDIA_TUNER_AV201X=m
 PROFILE_CFLAGS := -DCONFIG_MEDIA_TUNER_AV201X=1
 
 FIRMWARE := dvb-usb-id5580.fw
+FIRMWARE_NOTE := The TBS firmware is proprietary and carries no
+FIRMWARE_NOTE += redistribution grant, so it cannot be part of this package
+FIRMWARE_NOTE += and is in no distribution package either. It has to come
+FIRMWARE_NOTE += from the vendor.
 USB_ID := 734c:5580
 LOAD_MODULES := dvb_usb si2183 av201x dvb_usb_tbs5580
 INSMOD_FILES := dvb-usb.ko si2183.ko av201x.ko dvb-usb-tbs5580.ko

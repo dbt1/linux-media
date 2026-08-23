@@ -23,8 +23,11 @@ rm -rf "$CHECK_OUT"
 trap 'rm -rf "$WORK" "$CHECK_OUT"' EXIT
 
 fail=0
+skipped=""
 pass() { printf '  ok   %s\n' "$*"; }
 bad()  { printf '  FAIL %s\n' "$*"; fail=1; }
+skip() { printf '  skip %s\n' "$*"; skipped="$skipped
+  $*"; }
 
 # All sub-makes use the private tree.
 mk() { make -C "$BASE_DIR" OUT_BASE="$CHECK_OUT" "$@"; }
@@ -82,6 +85,22 @@ check_dkms_conf() {
 	grep -q '^MAKE\[0\]="make ' "$conf" \
 		&& pass "$profile: MAKE[0] starts with literal make" \
 		|| bad "$profile: MAKE[0] must start with 'make'"
+
+	# Identity and autoinstall decide whether dkms picks the module up at
+	# all on the next kernel; none of the three was ever compared.
+	conf_field "$profile" "$conf" PACKAGE_NAME "$(var "$profile" DKMS_PACKAGE)"
+	conf_field "$profile" "$conf" PACKAGE_VERSION "$(var "$profile" DKMS_VERSION)"
+	conf_field "$profile" "$conf" AUTOINSTALL yes
+}
+
+conf_field() {
+	local profile="$1" conf="$2" key="$3" want="$4" got
+	got="$(sed -n "s/^$key=\"\(.*\)\"\$/\1/p" "$conf")"
+	if [ "$got" = "$want" ]; then
+		pass "$profile: $key=$want"
+	else
+		bad "$profile: $key is '$got', expected '$want'"
+	fi
 }
 
 # 3. The snapshot must be exactly "pinned ref + series", nothing else.
@@ -90,7 +109,22 @@ check_snapshot_matches_source() {
 	local profile="$1" src ref want dirs d p series
 	src="$(var "$profile" DKMS_SRC)"
 	[ -d "$src" ] || { bad "$profile: no snapshot at $src"; return; }
-	ref="$(grep '^linux_media_ref: ' "$src/PROVENANCE" | cut -d' ' -f2)"
+	# The reference comes from the profile, never from the artefact under
+	# test: a dkms-source that pinned the wrong ref would also write that
+	# wrong ref into PROVENANCE and compare clean against itself.
+	ref="$(pvar "$profile" LINUX_MEDIA_REF)"
+	[ -n "$ref" ] || { bad "$profile: profile pins no LINUX_MEDIA_REF"; return; }
+	local rec_ref rec_sha want_sha
+	rec_ref="$(sed -n 's/^linux_media_ref: //p' "$src/PROVENANCE")"
+	rec_sha="$(sed -n 's/^linux_media_commit: //p' "$src/PROVENANCE")"
+	want_sha="$(git -C "$BASE_DIR/linux_media" rev-parse "$ref^{commit}" \
+		2>/dev/null)"
+	if [ -n "$want_sha" ] && [ "$rec_ref" = "$ref" ] \
+		&& [ "$rec_sha" = "$want_sha" ]; then
+		pass "$profile: PROVENANCE records the pinned ref ($ref)"
+	else
+		bad "$profile: PROVENANCE says $rec_ref/$rec_sha, profile pins $ref/$want_sha"
+	fi
 	dirs="$(pvar "$profile" USB_DIR) $(pvar "$profile" FE_DIR)"
 	dirs="$dirs $(pvar "$profile" TUNER_DIR) drivers/media/common"
 	want="$WORK/want-$profile"
@@ -158,12 +192,139 @@ check_dkms_build() {
 		&& pass "$profile: builds under dkms invocation ($got/$got modules)"
 }
 
+# 5. debian/copyright is the part of the packaging that makes a legal claim
+# about several hundred files. Nothing here needs dpkg: the generator is
+# driven directly, which is also why it lives outside the Makefile.
+check_copyright() {
+	local profile="$1" src tmpl out
+	src="$(var "$profile" DKMS_SRC)"
+	tmpl="$(var "$profile" DEB_TEMPLATE_DIR)/copyright"
+	out="$WORK/copyright-$profile"
+	if ! "$BASE_DIR/scripts/common/gen-copyright.sh" "$src" "$tmpl" "$out" \
+		2>"$WORK/copyright-$profile.log"; then
+		bad "$profile: gen-copyright.sh failed"
+		sed 's/^/       /' "$WORK/copyright-$profile.log" | head -8
+		return
+	fi
+	# Coverage and the standalone-paragraph rule are asserted by the
+	# generator itself; what it cannot judge is whether the entries read
+	# like copyright holders at all.
+	awk '{
+			if ($0 ~ /^Copyright:/) {
+				incopy = 1
+				line = $0
+				sub(/^Copyright:[ \t]*/, "", line)
+			} else if (incopy && $0 ~ /^[ \t]/) {
+				line = $0
+			} else {
+				incopy = 0
+				next
+			}
+			if (line != "")
+				print line
+		}' "$out" > "$WORK/copyright-$profile.fields"
+	if grep -nE '(PROVIDED|DISCLAIM|WARRANT|FITNESS|for copyright|following copyrights|retained the copyright|[Bb]ased on|Functions:|Support for|^Removed|^Ported|^[-*(])' \
+		"$WORK/copyright-$profile.fields" \
+		>"$WORK/copyright-$profile.junk"; then
+		bad "$profile: non-holder text ended up in a Copyright field"
+		head -3 "$WORK/copyright-$profile.junk" | sed 's/^/       /'
+	else
+		pass "$profile: copyright fields name holders only"
+	fi
+	# A stanza that names nobody is what every silent failure in the
+	# extraction chain looks like, so it is an error and not an ok.
+	if grep -q '^Copyright: no copyright notice' "$out"; then
+		bad "$profile: $(grep -c '^Copyright: no copyright notice' "$out") stanza(s) name no holder at all"
+	else
+		pass "$profile: every stanza names at least one holder"
+	fi
+	# Collation order decides the entry order, so a locale-dependent sort
+	# makes the same source produce a different package elsewhere. Both
+	# runs have to differ in the *ambient* locale, otherwise this proves
+	# nothing: the generator pins LC_ALL itself, and comparing two C runs
+	# would stay green even if that pin were removed.
+	local other
+	other="$(locale -a 2>/dev/null \
+		| grep -iE '^(de_DE|en_US|fr_FR)\.utf-?8$' | head -1)"
+	if [ -z "$other" ]; then
+		skip "$profile: locale check, no non-C UTF-8 locale installed"
+	elif LC_ALL=C "$BASE_DIR/scripts/common/gen-copyright.sh" "$src" \
+			"$tmpl" "$out.c" >/dev/null 2>&1 \
+		&& LC_ALL="$other" "$BASE_DIR/scripts/common/gen-copyright.sh" \
+			"$src" "$tmpl" "$out.l" >/dev/null 2>&1 \
+		&& cmp -s "$out.c" "$out.l"; then
+		pass "$profile: copyright identical under C and $other"
+	else
+		bad "$profile: copyright changes between C and $other"
+	fi
+	local n
+	n="$(grep -c '^Files:' "$out")"
+	pass "$profile: copyright renders ($n stanzas, $(wc -l < "$WORK/copyright-$profile.fields") holder lines)"
+}
+
+# 6. The generator must refuse what it cannot classify. A licence file that
+# quietly guesses is worse than one that fails, so the guard gets its own
+# fault injection instead of being taken on trust.
+check_copyright_guards() {
+	local fake="$WORK/fake-src" tmpl="$WORK/fake-template" out="$WORK/fake-out"
+	mkdir -p "$fake/drivers"
+	printf '/* SPDX-License-Identifier: Frobnicate-1.0 */\n' \
+		> "$fake/drivers/x.c"
+	printf 'Format: x\n\n@DRIVER_STANZAS@\n' > "$tmpl"
+	if "$BASE_DIR/scripts/common/gen-copyright.sh" "$fake" "$tmpl" "$out" \
+		>/dev/null 2>&1; then
+		bad "generator accepted an unknown SPDX identifier"
+	else
+		pass "generator refuses an unknown SPDX identifier"
+	fi
+	printf 'Format: x\n' > "$tmpl"
+	printf '/* SPDX-License-Identifier: GPL-2.0 */\n' > "$fake/drivers/x.c"
+	if "$BASE_DIR/scripts/common/gen-copyright.sh" "$fake" "$tmpl" "$out" \
+		>/dev/null 2>&1; then
+		bad "generator accepted a template without @DRIVER_STANZAS@"
+	else
+		pass "generator refuses a template without @DRIVER_STANZAS@"
+	fi
+}
+
+# 7. Every placeholder a template uses has to be filled by the Makefile, and
+# every substitution the Makefile performs has to have a taker. Both halves
+# silently produce a wrong package otherwise.
+check_placeholders() {
+	local tmpl_dir used filled
+	tmpl_dir="$BASE_DIR/packaging/debian"
+	used="$(grep -rhoE '@[A-Z_]+@' "$tmpl_dir" | sort -u)"
+	filled="$(sed -n 's/.*s|\(@[A-Z_]*@\)|.*/\1/p' "$BASE_DIR/Makefile" \
+		| sort -u)"
+	# These two are line replacements, not sed substitutions.
+	filled="$(printf '%s\n@DRIVER_STANZAS@\n@FIRMWARE_NOTE@\n' "$filled" \
+		| sort -u)"
+	local orphan
+	orphan="$(comm -23 <(printf '%s\n' "$used") <(printf '%s\n' "$filled"))"
+	if [ -n "$orphan" ]; then
+		bad "template placeholder nobody fills: $(echo $orphan)"
+	else
+		pass "every template placeholder is filled"
+	fi
+	orphan="$(comm -13 <(printf '%s\n' "$used") <(printf '%s\n' "$filled"))"
+	if [ -n "$orphan" ]; then
+		bad "substitution without a template that uses it: $(echo $orphan)"
+	else
+		pass "every substitution has a taker"
+	fi
+}
+
 echo "Profiles: $PROFILES"
 echo "Generated in: $CHECK_OUT (inside the repo, on purpose)"
 echo "Reference in: $WORK (outside the repo)"
 echo
 echo "Makefile:"
 check_default_goal
+check_placeholders
+
+echo
+echo "Packaging:"
+check_copyright_guards
 
 for p in $PROFILES; do
 	echo
@@ -175,17 +336,22 @@ for p in $PROFILES; do
 	fi
 	check_dkms_conf "$p"
 	check_snapshot_matches_source "$p"
+	check_copyright "$p"
 	if [ -d "$KDIR" ]; then
 		check_dkms_build "$p"
 	else
-		echo "  skip $p: no kernel headers at $KDIR"
+		skip "$p: build check, no kernel headers at $KDIR"
 	fi
 done
 
 echo
-if [ "$fail" -eq 0 ]; then
-	echo "All checks passed."
+if [ "$fail" -ne 0 ]; then
+	echo "RESULT: checks FAILED."
+elif [ -n "$skipped" ]; then
+	# Naming them matters: a caller that only reads the last line would
+	# otherwise take a partial run for full coverage.
+	echo "RESULT: passed, but these checks did not run:$skipped"
 else
-	echo "Checks FAILED."
+	echo "RESULT: all checks passed."
 fi
 exit "$fail"

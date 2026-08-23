@@ -73,11 +73,8 @@ and reports possible blacklists (modprobe.d, kernel parameters).
 ## Kernel update (rebuild, tarball fallback only)
 
 **With DKMS this section is moot** -- see *Automating the rebuild (DKMS)*
-below. It only applies to hosts using the `out/` tarball route, where
-`tbs5580-modules.service` is active. On a DKMS host the service is disabled
-and would report the vermagic error again after a kernel update.
-
-On such a host you must rebuild the modules by hand after a kernel update.
+below. It only applies to hosts using the `out/` tarball route, where the
+modules have to be rebuilt and reloaded by hand after a kernel update.
 
 ```
 KVER=$(uname -r)
@@ -90,8 +87,11 @@ For `tbs5580` there is also a short helper script in the repo:
 
 ```
 ./scripts/tbs5580/rebuild.sh
-sudo systemctl restart tbs5580-modules.service
 ```
+
+The load and unload commands for that build are in the generated
+`out/<profile>/INSTALL.txt`. If you still run the systemd unit of an older
+revision of this repo, restart that instead.
 
 Note: kernel headers for the running kernel must be installed
 (`linux-headers-$KVER`).
@@ -101,10 +101,14 @@ Note: kernel headers for the running kernel must be installed
 After a kernel update without a rebuild:
 
 - `/dev/dvb` is missing entirely, Neutrino starts without a tuner
-- `systemctl status tbs5580-modules.service` -> `failed`, ExecStart exit 1
-- `load-tbs5580.sh` aborts in `check_vermagic`: `vermagic mismatch for <KVER>`
 - `lsmod` shows only `dvb_core` (maybe `si2157`), no `dvb_usb_tbs5580`
 - `modinfo -F vermagic out/<profile>/*.ko` != `uname -r`
+
+On hosts still set up the old way, additionally: `systemctl status
+tbs5580-modules.service` -> `failed` with ExecStart exit 1, and
+`load-tbs5580.sh` aborts in `check_vermagic` (`vermagic mismatch for <KVER>`).
+That unit and that loader come from an older revision of this repo and are no
+longer generated here.
 
 This is not a driver defect: the loader deliberately refuses to load incompatible
 modules. The fix is the rebuild above, not `rmmod`/`modprobe`.
@@ -115,9 +119,9 @@ Implemented (as of 2026-08-23). DKMS rebuilds the modules for every kernel
 update, including unattended apt upgrades -- as long as the sources still build
 against the new kernel API. An API break (a jump to a new Debian release, say)
 needs updated sources like any out-of-tree driver; DKMS then fails silently and
-the tuner is missing. `modprobe` and udev then load them
-on their own -- `tbs5580-modules.service` and `load-tbs5580.sh` are no longer
-needed.
+the tuner is missing. `modprobe` and udev load the modules on their own -- the
+systemd unit and loader script of older revisions of this repo are no longer
+needed and no longer generated.
 
 ### Prerequisite: headers meta package
 
@@ -182,10 +186,15 @@ Maintainer field and version can be set at build time:
 make dkms-deb PROFILE=tbs5580 DEB_MAINTAINER='Name <mail@example.org>'
 ```
 
-Without it the hostname is used. The package is reproducible: the changelog
-date comes from `SOURCE_DATE_EPOCH` or the last commit, not from the clock. The tuner firmware is proprietary and must not
-be shipped, so it is not included; the `postinst` warns when it is missing,
-details in `README.Debian`.
+Without it the package carries `linux-media packaging <linux-media@invalid>`
+-- deliberately a fixed, non-resolvable address rather than the hostname, so
+that two machines build the same package from the same source. The package is
+reproducible: the changelog date comes from `SOURCE_DATE_EPOCH` or the last
+commit and is formatted in UTC, neither from the clock nor from the local time
+zone. Without a git context and without `SOURCE_DATE_EPOCH`, `dkms-deb` stops
+instead of quietly reaching for the clock. The package ships no firmware; the
+`postinst` warns when none is present, and `README.Debian` says where it comes
+from for each tuner.
 
 The Debian templates live in `packaging/debian/` and are filled in at build
 time with profile, version, maintainer and firmware list.
@@ -206,13 +215,21 @@ and stays a manual step.
 ### What it costs
 
 DKMS installs into `/lib/modules/<KVER>/updates/dkms/`. This deliberately gives
-up the original "no installation into `/lib/modules`" principle. `updates/dkms`
-ranks above `kernel/`, so the modules override in-tree modules of the same name
-for *all* devices that use them. For `tbs5580` that is `dvb-usb` alone
-(`si2183` and `av201x` do not exist in-tree). For `t230`/`t210` it is all
-four: `dvb_usb_v2`, `dvb-usb-dvbsky`, `si2168` and `si2157`. Check this first
-on a host with other DVB hardware; the generated `README.Debian` lists the
-names per profile.
+up the original "no installation into `/lib/modules`" principle.
+
+Where an in-tree module of the same name exists, DKMS does not merely outrank
+it in the search order: it *moves* the original file into
+`/var/lib/dkms/<package>/original_module/` and puts its own build in that
+place (`dkms status` then reports "Original modules exist"). The out-of-tree
+module afterwards serves *all* devices that use it, not only this tuner;
+removing the package puts the original back. If the DKMS state is lost, so is
+the original -- about 25 in-tree drivers depend on `dvb-usb`.
+
+For `tbs5580` that is `dvb-usb` alone (`si2183` and `av201x` do not exist
+in-tree). For `t230`/`t210` it is all four: `dvb_usb_v2`, `dvb-usb-dvbsky`,
+`si2168` and `si2157`. Check this first on a host with other DVB hardware; the
+generated `README.Debian` lists the modules shipped per profile -- which of
+them actually displace anything depends on the kernel.
 
 The `out/` tarball route (`make package`) stays unchanged as a fallback for
 hosts without DKMS.
@@ -244,7 +261,7 @@ Example profile variables:
 - `packaging/debian/`  Templates for the DKMS `.deb`
 - `scripts/`  Version-controlled helpers, e.g. `scripts/tbs5580/rebuild.sh`
 - `VERSION`    Version of the DKMS package
-- `out/<profile>/`  Generated build artifacts, loaders, and logs
+- `out/<profile>/`  Generated build artifacts and logs
 - `out/dkms/`  Generated DKMS source trees per profile/version
 - `out/dist/`  Packages (tar.xz per profile/KVER, `.deb` per profile/version)
 

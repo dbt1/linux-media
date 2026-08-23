@@ -356,6 +356,10 @@ package: build
 clean: check-profile
 
 print-profile-vars: check-profile
+	@echo "LINUX_MEDIA_REF=$(LINUX_MEDIA_REF)"
+	@echo "FIRMWARE=$(FIRMWARE)"
+	@echo "FIRMWARES=$(FIRMWARES)"
+	@echo "FIRMWARE_NOTE=$(FIRMWARE_NOTE)"
 	@echo "USB_DIR=$(USB_DIR)"
 	@echo "FE_DIR=$(FE_DIR)"
 	@echo "TUNER_DIR=$(TUNER_DIR)"
@@ -369,6 +373,10 @@ check:
 print-vars:
 	@echo "PROFILE=$(PROFILE)"
 	@echo "DKMS_SRC=$(DKMS_SRC)"
+	@echo "DKMS_PACKAGE=$(DKMS_PACKAGE)"
+	@echo "DKMS_DEB_PACKAGE=$(DKMS_DEB_PACKAGE)"
+	@echo "DKMS_VERSION=$(DKMS_VERSION)"
+	@echo "DEB_TEMPLATE_DIR=$(DEB_TEMPLATE_DIR)"
 	@echo "KVER=$(KVER)"
 	@echo "KDIR=$(KDIR)"
 	@echo "LINUX_MEDIA=$(LINUX_MEDIA)"
@@ -387,8 +395,11 @@ DKMS_SRC ?= $(DKMS_OUT)/$(DKMS_PACKAGE)-$(DKMS_VERSION)
 DKMS_DIRS := $(sort $(USB_DIR) $(FE_DIR) $(TUNER_DIR) drivers/media/common)
 
 DEB_TEMPLATE_DIR := $(BASE)/packaging/debian
-DEB_HOST_ID ?= $(shell hostname)
-DEB_MAINTAINER ?= linux-media packaging <linux-media@$(DEB_HOST_ID)>
+# Deliberately not derived from the host: the address ends up in the package,
+# so a per-host default would make two builds of the same source differ.
+# .invalid is reserved for addresses that must not resolve (RFC 2606).
+# Override with DEB_MAINTAINER when the package is meant to be handed on.
+DEB_MAINTAINER ?= linux-media packaging <linux-media@invalid>
 DKMS_MODULE_NAMES := $(basename $(OUTPUT_MODULES))
 
 check-dkms-version:
@@ -585,7 +596,7 @@ dkms-source: check-dkms-version check-dkms-profile check-snapshot
 		echo "Reproduce with:"; \
 		echo "  git clone $(LINUX_MEDIA_URL)"; \
 		echo "  git archive $(LINUX_MEDIA_REF) -- $(DKMS_DIRS)"; \
-		echo "  then apply the series above with 'git apply -p1'"; \
+		echo "  then apply the series above with 'patch -p1'"; \
 	} > "$(DKMS_SRC)/PROVENANCE"; \
 	echo "Wrote $(DKMS_SRC)"
 
@@ -603,10 +614,12 @@ dkms-deb: export DKMS_V_PACKAGE = $(DKMS_DEB_PACKAGE)
 dkms-deb: export DKMS_V_VERSION = $(DKMS_VERSION)
 dkms-deb: export DKMS_V_PROFILE = $(PROFILE)
 dkms-deb: export DKMS_V_MAINT = $(DEB_MAINTAINER)
-dkms-deb: export DKMS_V_OVER = $(DKMS_MODULE_NAMES)
+dkms-deb: export DKMS_V_MODLIST = $(DKMS_MODULE_NAMES)
 dkms-deb: export DKMS_V_FW = $(strip $(FIRMWARE) $(FIRMWARES))
+dkms-deb: export DKMS_V_FWNOTE = $(FIRMWARE_NOTE)
 dkms-deb: check-deb-tools dkms-source
 	@set -eu; \
+	LC_ALL=C; export LC_ALL; \
 	src=$$(realpath -m -- "$(DKMS_SRC)"); \
 	dist=$$(realpath -m -- "$(OUT_DIST)"); \
 	build_dir="$$(dirname "$$src")"; \
@@ -616,83 +629,51 @@ dkms-deb: check-deb-tools dkms-source
 	esc() { printf '%s' "$$1" | sed -e 's/[\\&|]/\\&/g'; }; \
 	v_module=$$DKMS_V_MODULE; v_package=$$DKMS_V_PACKAGE; \
 	v_version=$$DKMS_V_VERSION; v_profile=$$DKMS_V_PROFILE; \
-	v_maint=$$DKMS_V_MAINT; v_over=$$DKMS_V_OVER; \
-	fw_files=$$DKMS_V_FW; \
+	v_maint=$$DKMS_V_MAINT; v_modlist=$$DKMS_V_MODLIST; \
+	fw_files=$$DKMS_V_FW; fw_note=$$DKMS_V_FWNOTE; \
 	fw_list="$$fw_files"; \
 	if [ -z "$$fw_list" ]; then fw_list="(none required)"; fi; \
+	epoch=$${SOURCE_DATE_EPOCH:-}; \
+	if [ -z "$$epoch" ]; then \
+		epoch=$$(git -C "$(BASE)" log -1 --format=%ct 2>/dev/null \
+			|| true); \
+	fi; \
+	case "$$epoch" in \
+		''|*[!0-9]*) \
+			echo "No usable build date: [$$epoch]"; \
+			echo "Set SOURCE_DATE_EPOCH to a unix timestamp, or"; \
+			echo "build from a git checkout. Falling back to the"; \
+			echo "clock would make the package unreproducible."; \
+			exit 2 ;; \
+	esac; \
+	deb_date=$$(date -uR -d "@$$epoch"); \
+	if [ -z "$$deb_date" ]; then \
+		echo "date -uR rejected the epoch [$$epoch]"; exit 2; \
+	fi; \
+	SOURCE_DATE_EPOCH="$$epoch"; export SOURCE_DATE_EPOCH; \
 	subst="s|@MODULE@|$$(esc "$$v_module")|g; \
 		s|@PACKAGE@|$$(esc "$$v_package")|g; \
 		s|@VERSION@|$$(esc "$$v_version")|g; \
 		s|@PROFILE@|$$(esc "$$v_profile")|g; \
 		s|@MAINTAINER@|$$(esc "$$v_maint")|g; \
-		s|@DATE@|$$(esc "$$(date -R -d @$${SOURCE_DATE_EPOCH:-$$(git -C \
-			"$(BASE)" log -1 --format=%ct 2>/dev/null || date +%s)})")|g; \
+		s|@DATE@|$$(esc "$$deb_date")|g; \
 		s|@FIRMWARE_FILES@|$$(esc "$$fw_files")|g; \
 		s|@FIRMWARE_LIST@|$$(esc "$$fw_list")|g; \
-		s|@OVERRIDE_LIST@|$$(esc "$$v_over")|g"; \
-	stanzas="$$deb_dir/.driver-stanzas"; \
-	: > "$$stanzas"; \
-	( cd "$$src" && find drivers -type f \
-		| sort | while read -r f; do \
-			lic=$$(sed -n '1,3s|.*SPDX-License-Identifier:[[:space:]]*\([A-Za-z0-9.+-]*\).*|\1|p' "$$f" | head -1); \
-			case "$$lic" in \
-				GPL-2.0) lic=GPL-2.0-only ;; \
-				GPL-2.0+) lic=GPL-2.0-or-later ;; \
-				'') \
-					if grep -qi 'any later version' "$$f"; then \
-						lic=UNSPECIFIED-or-later; \
-					else \
-						lic=UNSPECIFIED-only; \
-					fi ;; \
-			esac; \
-			printf '%s\t%s\n' "$$lic" "$$f"; \
-		done ) | sort > "$$deb_dir/.lic-map"; \
-	for lic in $$(cut -f1 "$$deb_dir/.lic-map" | sort -u); do \
-		awk -F'\t' -v l="$$lic" '$$1==l {print $$2}' \
-			"$$deb_dir/.lic-map" > "$$deb_dir/.files"; \
-		( cd "$$src" && while read -r f; do \
-			sed -n '1,60p' "$$f" | grep -i 'copyright' || true; \
-		  done < "$$deb_dir/.files" ) \
-		| sed -e 's|^[[:space:]/*#]*||' -e 's|[[:space:]]*\*/[[:space:]]*$$||' \
-			-e 's|[[:space:]][[:space:]]*| |g' \
-			-e 's|^[[:space:]]*||' -e 's|[[:space:]]*$$||' \
-			-e 's|^[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt][[:space:]]*||' \
-			-e 's|^(c)[[:space:]]*||I' -e 's|^[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt]||' \
-		| grep -vE '^[[:space:]]*$$' | sort -u > "$$deb_dir/.holders"; \
-		{ \
-			printf 'Files:'; \
-			sed 's/^/       /' "$$deb_dir/.files"; \
-			if [ -s "$$deb_dir/.holders" ]; then \
-				printf 'Copyright:\n'; \
-				sed 's/^/ /' "$$deb_dir/.holders"; \
-			else \
-				echo "Copyright: no copyright notice in these files"; \
-			fi; \
-			case "$$lic" in \
-				UNSPECIFIED-or-later) \
-					echo "License: GPL-2.0-or-later"; \
-					echo "Comment: No SPDX identifier in these files. Their"; \
-					echo " licence text offers version 2 or, at the user's"; \
-					echo " option, any later version."; ;; \
-				UNSPECIFIED-only) \
-					echo "License: GPL-2.0-only"; \
-					echo "Comment: No SPDX identifier in these files and no"; \
-					echo " later-version clause in their licence text; the"; \
-					echo " Linux kernel default of GPL-2.0-only is assumed."; ;; \
-				*) echo "License: $$lic"; ;; \
-			esac; \
-			echo ""; \
-		} >> "$$stanzas"; \
-	done; \
-	for f in control rules changelog README.Debian; do \
+		s|@MODULE_LIST@|$$(esc "$$v_modlist")|g"; \
+	for f in control rules changelog; do \
 		sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/$$f" > "$$deb_dir/$$f"; \
 	done; \
+	printf '%s\n' "$$fw_note" | fold -s -w 76 \
+		| sed 's/[[:space:]]*$$//' > "$$deb_dir/.fwnote"; \
+	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/README.Debian" \
+		| sed -e '/^@FIRMWARE_NOTE@$$/{r '"$$deb_dir"'/.fwnote' \
+			-e 'd}' > "$$deb_dir/README.Debian"; \
+	rm -f "$$deb_dir/.fwnote"; \
 	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/copyright" \
-		| awk -v s="$$stanzas" '/@DRIVER_STANZAS@/ { \
-			while ((getline line < s) > 0) print line; next } 1' \
-		> "$$deb_dir/copyright"; \
-	rm -f "$$stanzas" "$$deb_dir/.lic-map" "$$deb_dir/.files" \
-		"$$deb_dir/.holders"; \
+		> "$$deb_dir/.copyright.in"; \
+	"$(BASE)/scripts/common/gen-copyright.sh" "$$src" \
+		"$$deb_dir/.copyright.in" "$$deb_dir/copyright"; \
+	rm -f "$$deb_dir/.copyright.in"; \
 	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/postinst" \
 		> "$$deb_dir/$(DKMS_DEB_PACKAGE).postinst"; \
 	cp "$(DEB_TEMPLATE_DIR)/source/format" "$$deb_dir/source/format"; \
