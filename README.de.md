@@ -39,7 +39,18 @@ Ergebnis:
 - Paket: `out/dist/tbs5580-k<KVER>.tar.xz` via `make package PROFILE=tbs5580`
 - Anleitung im Paket: `INSTALL.txt` (English)
 
-Optionaler Vorab-Check (kein Build):
+Selbsttest ueber alle Profile (kein root, keine Hardware noetig; baut jedes
+Profil einmal, wenn Kernel-Header da sind):
+
+```
+make check
+```
+
+Er prueft unter anderem, ob `dkms.conf` zum Profil passt, ob der Snapshot frei
+von Build-Artefakten ist, ob die Patch-Serie wirklich angekommen ist und ob der
+generierte Baum unter genau der Kommandozeile baut, die DKMS verwendet.
+
+Optionaler Vorab-Check fuer ein Geraet (kein Build):
 
 ```
 make precheck PROFILE=t230
@@ -56,9 +67,15 @@ und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
   Genau deshalb gibt es den DKMS-Weg.
 - Secure Boot: Unsigned Modules muessen erlaubt sein.
 
-## Kernel-Update (Rebuild)
+## Kernel-Update (Rebuild, nur Tarball-Fallback)
 
-Nach einem Kernel-Update muessen die Module neu gebaut werden.
+**Mit DKMS ist dieser Abschnitt gegenstandslos** -- siehe *Rebuild
+automatisieren (DKMS)* weiter unten. Er gilt nur noch fuer Hosts, die den
+`out/`-Tarball-Weg benutzen; dort ist `tbs5580-modules.service` aktiv.
+Auf einem DKMS-Host ist der Service deaktiviert und wuerde nach einem
+Kernel-Update wieder den vermagic-Fehler liefern.
+
+Nach einem Kernel-Update muessen die Module dann von Hand neu gebaut werden.
 
 ```
 KVER=$(uname -r)
@@ -109,11 +126,23 @@ Ursache dafuer, dass der Tuner nach einem Update trotzdem weg ist.
 
 ### Einrichten
 
+Der empfohlene Weg ist das Paket aus dem naechsten Abschnitt -- es kopiert die
+Quellen selbst nach `/usr/src/` und meldet sie bei DKMS an.
+
+Von Hand geht es auch, dann muss der Baum aber ebenfalls nach `/usr/src/`:
+`dkms add -m <name> -v <version>` sucht ausschliesslich dort und findet einen
+Baum unter `out/` nicht.
+
 ```
 make dkms-source PROFILE=tbs5580
+sudo cp -a out/dkms/linux-media-tbs5580-$(cat VERSION) /usr/src/
 sudo dkms add     -m linux-media-tbs5580 -v $(cat VERSION)
 sudo dkms install -m linux-media-tbs5580 -v $(cat VERSION)
 ```
+
+Nicht `dkms add out/dkms/<baum>` benutzen: das legt einen Symlink auf genau
+dieses Verzeichnis an, und der naechste `make dkms-source` loescht es -- der
+Autobuild beim naechsten Kernel-Update wuerde dann fehlschlagen.
 
 `make dkms-source` erzeugt unter `out/dkms/<paket>-<version>/` einen
 eigenstaendigen Quellbaum: `dkms.conf`, ein Wrapper-Makefile, die gemeinsame
@@ -121,11 +150,12 @@ eigenstaendigen Quellbaum: `dkms.conf`, ein Wrapper-Makefile, die gemeinsame
 Profil genannten Verzeichnisse, ca. 9 MB). Alle Pfade und Modulnamen kommen aus
 `profiles/<name>.mk`, das Target ist also nicht auf `tbs5580` festgelegt.
 
-Der Snapshot wird nur erzeugt, wenn `linux_media` sauber ist, auf einem
-Nachfahren von `LINUX_MEDIA_REF` steht und die Patch-Serie des Profils
-tatsaechlich angewendet ist. Sonst bricht das Target ab -- ein nicht
-reproduzierbarer Baum soll nicht ins Paket wandern. Was genau drin ist, steht
-in `PROVENANCE`.
+Der Snapshot kommt per `git archive` direkt aus dem gepinnten
+`LINUX_MEDIA_REF`, danach wird die Patch-Serie des Profils darauf angewendet.
+Der Arbeitsbaum unter `linux_media/` spielt dabei keine Rolle: es landen weder
+Build-Artefakte noch Patches eines anderen Profils im Paket, und das Ergebnis
+ist auf jedem Host identisch. `PROVENANCE` nennt Commit, Serie und den Befehl
+zum Nachbauen.
 
 ### Ausliefern
 
@@ -149,9 +179,11 @@ Profil, Version, Maintainer und Firmwareliste gefuellt.
 DKMS installiert nach `/lib/modules/<KVER>/updates/dkms/`. Das gibt das
 urspruengliche Prinzip "keine Installation nach `/lib/modules`" bewusst auf.
 `updates/dkms` rangiert vor `kernel/`, die Module ueberschreiben also
-gleichnamige In-Tree-Module fuer *alle* Geraete, die sie nutzen -- bei
-`tbs5580` betrifft das `dvb-usb`, bei `t230`/`t210` zusaetzlich `si2168` und
-`si2157`. Auf einem Host mit weiterer DVB-Hardware vorher pruefen.
+gleichnamige In-Tree-Module fuer *alle* Geraete, die sie nutzen. Bei
+`tbs5580` betrifft das nur `dvb-usb` (`si2183` und `av201x` gibt es in-tree
+nicht). Bei `t230`/`t210` sind es alle vier: `dvb_usb_v2`, `dvb-usb-dvbsky`,
+`si2168` und `si2157`. Auf einem Host mit weiterer DVB-Hardware vorher
+pruefen; die generierte `README.Debian` nennt die Liste je Profil.
 
 Der `out/`-Tarball-Weg (`make package`) bleibt unveraendert als Fallback fuer
 Hosts ohne DKMS.
@@ -179,6 +211,7 @@ Beispiel-Variablen im Profil:
 - `profiles/`  Profile pro Tuner
 - `patches/`   Patch-Serien pro Tuner
 - `mk/`        Gemeinsame Make-Fragmente (`build-modules.mk`)
+- `scripts/common/check.sh`  Selbsttest, aufgerufen von `make check`
 - `packaging/debian/`  Vorlagen fuer das DKMS-`.deb`
 - `scripts/`   Versionierte Helfer, z. B. `scripts/tbs5580/rebuild.sh`
 - `VERSION`    Version des DKMS-Pakets

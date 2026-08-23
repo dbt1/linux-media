@@ -63,7 +63,19 @@ build-tuner:
 		echo "TUNER_MODULES empty, skipping"; \
 	fi
 
+# Tolerate a missing KDIR: when DKMS removes a module the headers of the
+# kernel being removed are usually gone already, and failing there would
+# abort the removal.
 clean:
-	@$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(USB_DIR)" clean
-	@$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(FE_DIR)" clean
-	@$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$(TUNER_DIR)" clean
+	@if [ ! -d "$(KDIR)" ]; then \
+		echo "KDIR not present, nothing to clean: $(KDIR)"; \
+		exit 0; \
+	fi; \
+	for pair in "$(USB_DIR):$(USB_MODULES)" "$(FE_DIR):$(FE_MODULES)" \
+		"$(TUNER_DIR):$(TUNER_MODULES)"; do \
+		dir="$${pair%%:*}"; \
+		mods="$${pair#*:}"; \
+		if [ -n "$$mods" ]; then \
+			$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$$dir" clean; \
+		fi; \
+	done

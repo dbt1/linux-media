@@ -11,8 +11,11 @@ administrator has to install it.
 The @PROFILE@ profile needs one of: @FIRMWARE_LIST@
 
 Place the file in /lib/firmware/ and reload the module, or replug the device.
-Some of these files are shipped by Debian in firmware-linux-nonfree or
-firmware-misc-nonfree; the rest come from the tuner vendor.
+
+Where to get it depends on the tuner. The Si2168 firmware used by the DVB-T/C
+sticks is packaged by Debian in firmware-misc-nonfree. The TBS firmware
+(dvb-usb-id5580.fw and friends) is not in any distribution package and has to
+come from the vendor.
 
 Module override
 ---------------
@@ -25,6 +28,14 @@ If a name above also exists in your running kernel, the out-of-tree version
 replaces it for *all* devices that use it, not only for this tuner. On a host
 with other DVB hardware, check that those devices still work after installing
 this package.
+
+Secure Boot
+-----------
+
+DKMS builds unsigned modules by default. On a machine with Secure Boot
+enabled the kernel refuses to load them, and the tuner stays absent even
+though "dkms status" reports success. Either enrol a MOK and configure DKMS
+to sign (see /usr/share/doc/dkms/README.Debian), or turn Secure Boot off.
 
 Source
 ------

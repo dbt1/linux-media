@@ -39,7 +39,18 @@ Result:
 - Package: `out/dist/tbs5580-k<KVER>.tar.xz` via `make package PROFILE=tbs5580`
 - Instructions inside the package: `INSTALL.txt` (English)
 
-Optional precheck (no build):
+Self-check across all profiles (no root, no hardware needed; builds every
+profile once when kernel headers are available):
+
+```
+make check
+```
+
+Among other things it verifies that `dkms.conf` matches the profile, that the
+snapshot is free of build artifacts, that the patch series really landed, and
+that the generated tree builds under exactly the command line DKMS uses.
+
+Optional precheck for a device (no build):
 
 ```
 make precheck PROFILE=t230
@@ -56,9 +67,14 @@ and reports possible blacklists (modprobe.d, kernel parameters).
   That is exactly what the DKMS route is for.
 - Secure Boot: unsigned modules must be allowed.
 
-## Kernel update (rebuild)
+## Kernel update (rebuild, tarball fallback only)
 
-After a kernel update you must rebuild the modules.
+**With DKMS this section is moot** -- see *Automating the rebuild (DKMS)*
+below. It only applies to hosts using the `out/` tarball route, where
+`tbs5580-modules.service` is active. On a DKMS host the service is disabled
+and would report the vermagic error again after a kernel update.
+
+On such a host you must rebuild the modules by hand after a kernel update.
 
 ```
 KVER=$(uname -r)
@@ -109,11 +125,23 @@ tuner still being gone after an update.
 
 ### Setup
 
+The recommended route is the package from the next section: it copies the
+sources to /usr/src/ itself and registers them with DKMS.
+
+By hand works too, but the tree has to end up in /usr/src/ as well:
+`dkms add -m <name> -v <version>` looks there and nowhere else, so a tree
+under `out/` is not found.
+
 ```
 make dkms-source PROFILE=tbs5580
+sudo cp -a out/dkms/linux-media-tbs5580-$(cat VERSION) /usr/src/
 sudo dkms add     -m linux-media-tbs5580 -v $(cat VERSION)
 sudo dkms install -m linux-media-tbs5580 -v $(cat VERSION)
 ```
+
+Do not use `dkms add out/dkms/<tree>`: that records a symlink to exactly this
+directory, and the next `make dkms-source` deletes it -- the autobuild on the
+next kernel update would then fail.
 
 `make dkms-source` writes a self-contained source tree to
 `out/dkms/<package>-<version>/`: `dkms.conf`, a wrapper Makefile, the shared
@@ -121,10 +149,12 @@ sudo dkms install -m linux-media-tbs5580 -v $(cat VERSION)
 directories named in the profile, about 9 MB). All paths and module names come
 from `profiles/<name>.mk`, so the target is not tied to `tbs5580`.
 
-The snapshot is only produced if `linux_media` is clean, sits on a descendant
-of `LINUX_MEDIA_REF`, and the profile's patch series is actually applied.
-Otherwise the target aborts -- a tree that cannot be reproduced must not end up
-in a package. What went in is recorded in `PROVENANCE`.
+The snapshot is taken with `git archive` straight from the pinned
+`LINUX_MEDIA_REF`, and the profile's patch series is then applied to it. The
+working tree under `linux_media/` plays no part: neither build artifacts nor
+another profile's patches can end up in the package, and the result is the
+same on every host. `PROVENANCE` records the commit, the series and how to
+reproduce it.
 
 ### Shipping it
 
@@ -148,9 +178,11 @@ time with profile, version, maintainer and firmware list.
 DKMS installs into `/lib/modules/<KVER>/updates/dkms/`. This deliberately gives
 up the original "no installation into `/lib/modules`" principle. `updates/dkms`
 ranks above `kernel/`, so the modules override in-tree modules of the same name
-for *all* devices that use them -- for `tbs5580` that is `dvb-usb`, for
-`t230`/`t210` also `si2168` and `si2157`. Check this first on a host with other
-DVB hardware.
+for *all* devices that use them. For `tbs5580` that is `dvb-usb` alone
+(`si2183` and `av201x` do not exist in-tree). For `t230`/`t210` it is all
+four: `dvb_usb_v2`, `dvb-usb-dvbsky`, `si2168` and `si2157`. Check this first
+on a host with other DVB hardware; the generated `README.Debian` lists the
+names per profile.
 
 The `out/` tarball route (`make package`) stays unchanged as a fallback for
 hosts without DKMS.
@@ -178,6 +210,7 @@ Example profile variables:
 - `profiles/`  Profiles per tuner
 - `patches/`   Patch series per tuner
 - `mk/`        Shared make fragments (`build-modules.mk`)
+- `scripts/common/check.sh`  Self-check, invoked by `make check`
 - `packaging/debian/`  Templates for the DKMS `.deb`
 - `scripts/`  Version-controlled helpers, e.g. `scripts/tbs5580/rebuild.sh`
 - `VERSION`    Version of the DKMS package

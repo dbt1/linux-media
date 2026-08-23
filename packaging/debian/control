@@ -10,13 +10,17 @@ Package: @PACKAGE@
 Architecture: all
 Depends: ${misc:Depends},
          dkms,
-         linux-headers-amd64 | linux-headers-generic
+         linux-headers-amd64 | linux-headers-arm64 | linux-headers-generic
 Description: DVB driver modules for @PROFILE@ (DKMS)
  Out-of-tree DVB modules for the @PROFILE@ tuner, taken from the tbsdtv
- linux_media tree and reduced to the handful of drivers this device needs.
+ linux_media tree. Only the four modules this device needs are built; the
+ package ships the source directories they live in, because their headers
+ reference each other.
  .
- DKMS rebuilds them automatically for every kernel that is installed, so the
- tuner keeps working across kernel updates without manual intervention.
+ DKMS rebuilds them for every kernel that is installed, so the tuner keeps
+ working across kernel updates without manual intervention. This holds as
+ long as the sources still build against the new kernel; a kernel API break
+ needs updated sources, like any out-of-tree driver.
  .
  The tuner firmware is proprietary and is therefore not shipped with this
  package; see /usr/share/doc/@PACKAGE@/README.Debian for how to obtain it.

@@ -8,7 +8,11 @@ License: MIT
 
 Files: drivers/*
 Copyright: The Linux kernel authors and TBS Technologies
-License: GPL-2.0-only
+License: GPL-2.0-or-later
+Comment: These sources come from the Linux media tree. Most files carry
+ SPDX-License-Identifier: GPL-2.0-or-later, a smaller number GPL-2.0-only.
+ The SPDX line at the top of each file is authoritative: where a file says
+ GPL-2.0-only, that is the licence for that file.
 
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -29,10 +33,12 @@ License: MIT
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 
-License: GPL-2.0-only
+License: GPL-2.0-or-later
  This program is free software; you can redistribute it and/or modify it under
- the terms of the GNU General Public License version 2 as published by the
- Free Software Foundation.
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation; either version 2 of the License, or (at your option) any later
+ version. Individual files may restrict this to version 2 only; see the SPDX
+ identifier in the file itself.
  .
  On Debian systems, the full text of the GNU General Public License version 2
  can be found in /usr/share/common-licenses/GPL-2.

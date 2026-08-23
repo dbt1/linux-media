@@ -33,6 +33,10 @@ endif
 OUT_DIST ?= $(OUT_BASE)/dist
 INSTRUCTION_FILE := $(OUT_PROFILE)/INSTALL.txt
 
+# The include below defines targets, so the default goal has to be
+# pinned here — otherwise a bare 'make' would build instead of helping.
+.DEFAULT_GOAL := help
+
 include $(BASE)/mk/build-modules.mk
 
 OUTPUT_MODULES := $(USB_MODULES) $(FE_MODULES) $(TUNER_MODULES)
@@ -46,7 +50,8 @@ CHECK_MODULES ?= $(RMMOD_MODULES)
 .PHONY: help tbs5580 t230 t210 build fetch apply-patches check-profile \
 	check-linux-media check-kdir precheck \
 	copy-mods artifacts instructions package print-vars \
-	check-dkms-version check-snapshot dkms-source check-deb-tools dkms-deb
+	check-dkms-version check-dkms-profile check-snapshot dkms-source \
+	check-deb-tools dkms-deb check print-profile-vars
 
 help:
 	@printf "Usage:\\n"
@@ -60,6 +65,7 @@ help:
 	@printf "  make package PROFILE=<name>\\n"
 	@printf "  make dkms-source PROFILE=<name>\\n"
 	@printf "  make dkms-deb PROFILE=<name>\\n"
+	@printf "  make check\\n"
 
 tbs5580: build
 t230: build
@@ -345,6 +351,17 @@ package: build
 		$(OUTPUT_MODULES) artifacts.txt INSTALL.txt
 	@echo "Wrote $(OUT_DIST)/$(PROFILE)-k$(KVER).tar.xz"
 
+print-profile-vars: check-profile
+	@echo "USB_DIR=$(USB_DIR)"
+	@echo "FE_DIR=$(FE_DIR)"
+	@echo "TUNER_DIR=$(TUNER_DIR)"
+	@echo "USB_MODULES=$(USB_MODULES)"
+	@echo "FE_MODULES=$(FE_MODULES)"
+	@echo "TUNER_MODULES=$(TUNER_MODULES)"
+
+check:
+	@$(BASE)/scripts/common/check.sh
+
 print-vars:
 	@echo "PROFILE=$(PROFILE)"
 	@echo "KVER=$(KVER)"
@@ -357,10 +374,17 @@ print-vars:
 # --- DKMS -------------------------------------------------------------------
 
 DKMS_PACKAGE ?= linux-media-$(PROFILE)
+DKMS_DEB_PACKAGE ?= $(DKMS_PACKAGE)-dkms
 VERSION_FILE := $(BASE)/VERSION
 DKMS_VERSION ?= $(shell cat $(VERSION_FILE) 2>/dev/null)
-DKMS_SRC ?= $(OUT_BASE)/dkms/$(DKMS_PACKAGE)-$(DKMS_VERSION)
+DKMS_OUT ?= $(OUT_BASE)/dkms
+DKMS_SRC ?= $(DKMS_OUT)/$(DKMS_PACKAGE)-$(DKMS_VERSION)
 DKMS_DIRS := $(sort $(USB_DIR) $(FE_DIR) $(TUNER_DIR) drivers/media/common)
+
+DEB_TEMPLATE_DIR := $(BASE)/packaging/debian
+DEB_HOST_ID ?= $(shell hostname)
+DEB_MAINTAINER ?= linux-media packaging <linux-media@$(DEB_HOST_ID)>
+DKMS_MODULE_NAMES := $(basename $(OUTPUT_MODULES))
 
 check-dkms-version:
 	@if [ -z "$(DKMS_VERSION)" ]; then \
@@ -368,54 +392,77 @@ check-dkms-version:
 		exit 2; \
 	fi
 
-# Refuse to snapshot anything we cannot reproduce from
-# LINUX_MEDIA_REF plus the profile patch series.
+check-dkms-profile: check-profile
+	@if [ -z "$(strip $(OUTPUT_MODULES))" ]; then \
+		echo "Profile $(PROFILE) defines no modules to build"; \
+		exit 2; \
+	fi
+	@if [ -n "$(strip $(FIRMWARE))" ] && [ -n "$(strip $(FIRMWARES))" ]; then \
+		echo "Profile $(PROFILE) sets both FIRMWARE and FIRMWARES"; \
+		echo "The package treats the list as 'one of these is enough',"; \
+		echo "which would hide a missing mandatory file. Pick one."; \
+		exit 2; \
+	fi
+
+# The snapshot is built from the pinned ref plus the profile patch series,
+# never from the shared linux_media working tree. That keeps it reproducible
+# on any host, independent of which profile was patched there last, and it
+# cannot pick up build artifacts such as *.mod.c.
 check-snapshot: check-profile check-linux-media
 	@set -eu; \
 	if [ ! -d "$(LINUX_MEDIA)/.git" ]; then \
 		echo "Not a git checkout: $(LINUX_MEDIA)"; \
-		exit 2; \
-	fi; \
-	if [ -n "$$(git -C "$(LINUX_MEDIA)" status --porcelain)" ]; then \
-		echo "Working tree is dirty: $(LINUX_MEDIA)"; \
-		echo "A snapshot must be reproducible; commit or discard first."; \
-		exit 2; \
-	fi; \
-	if ! git -C "$(LINUX_MEDIA)" merge-base --is-ancestor \
-		"$(LINUX_MEDIA_REF)" HEAD; then \
-		echo "HEAD is not a descendant of $(LINUX_MEDIA_REF)"; \
 		echo "Run: make fetch PROFILE=$(PROFILE)"; \
 		exit 2; \
 	fi; \
-	if [ -f "$(PATCH_SERIES)" ]; then \
-		while read -r p; do \
+	if ! git -C "$(LINUX_MEDIA)" rev-parse --verify --quiet \
+		"$(LINUX_MEDIA_REF)^{commit}" >/dev/null; then \
+		echo "Pinned ref not found in $(LINUX_MEDIA): $(LINUX_MEDIA_REF)"; \
+		echo "Run: make fetch PROFILE=$(PROFILE)"; \
+		exit 2; \
+	fi; \
+	if [ -s "$(PATCH_SERIES)" ]; then \
+		while read -r p || [ -n "$$p" ]; do \
 			if [ -z "$$p" ]; then continue; fi; \
-			if ! git -C "$(LINUX_MEDIA)" apply --reverse --check \
-				"$(PATCH_DIR)/$$p" >/dev/null 2>&1; then \
-				echo "Patch is not applied: $$p"; \
-				echo "Run: make apply-patches PROFILE=$(PROFILE)"; \
+			if [ ! -f "$(PATCH_DIR)/$$p" ]; then \
+				echo "Missing patch file: $(PATCH_DIR)/$$p"; \
 				exit 2; \
 			fi; \
 		done < "$(PATCH_SERIES)"; \
 	fi; \
-	echo "Snapshot source verified: $$(git -C "$(LINUX_MEDIA)" rev-parse --short HEAD)"
+	echo "Snapshot source: $(LINUX_MEDIA_REF) + $(PROFILE) patch series"
 
-dkms-source: check-dkms-version check-snapshot
+dkms-source: check-dkms-version check-dkms-profile check-snapshot
 	@set -eu; \
+	if [ -s "$(PATCH_SERIES)" ] && ! command -v patch >/dev/null 2>&1; then \
+		echo "Missing tool: patch"; \
+		echo "Run: sudo apt install patch"; \
+		exit 2; \
+	fi; \
 	rm -rf "$(DKMS_SRC)"; \
 	mkdir -p "$(DKMS_SRC)/mk"; \
-	cp "$(BASE)/mk/build-modules.mk" "$(DKMS_SRC)/mk/build-modules.mk"; \
+	git -C "$(LINUX_MEDIA)" archive --format=tar "$(LINUX_MEDIA_REF)" \
+		-- $(DKMS_DIRS) | tar -x -C "$(DKMS_SRC)"; \
+	if [ -s "$(PATCH_SERIES)" ]; then \
+		while read -r p || [ -n "$$p" ]; do \
+			if [ -z "$$p" ]; then continue; fi; \
+			patch -p1 -d "$(DKMS_SRC)" --forward --silent \
+				--no-backup-if-mismatch < "$(PATCH_DIR)/$$p"; \
+			echo "Applied to snapshot: $$p"; \
+		done < "$(PATCH_SERIES)"; \
+	fi; \
 	for d in $(DKMS_DIRS); do \
-		if [ ! -d "$(LINUX_MEDIA)/$$d" ]; then \
-			echo "Missing source directory: $(LINUX_MEDIA)/$$d"; \
+		if [ ! -d "$(DKMS_SRC)/$$d" ]; then \
+			echo "Missing directory in snapshot: $$d"; \
 			exit 2; \
 		fi; \
-		mkdir -p "$(DKMS_SRC)/$$d"; \
-		find "$(LINUX_MEDIA)/$$d" -maxdepth 1 -type f \
-			\( -name '*.c' -o -name '*.h' -o -name 'Makefile' \
-			   -o -name 'Kconfig' \) \
-			-exec cp -f {} "$(DKMS_SRC)/$$d/" \; ; \
+		find "$(DKMS_SRC)/$$d" -mindepth 1 -maxdepth 1 -type d \
+			-exec rm -rf {} +; \
+		find "$(DKMS_SRC)/$$d" -maxdepth 1 -type f \
+			! -name '*.c' ! -name '*.h' ! -name 'Makefile' \
+			! -name 'Kconfig' -delete; \
 	done; \
+	cp "$(BASE)/mk/build-modules.mk" "$(DKMS_SRC)/mk/build-modules.mk"; \
 	{ \
 		echo '# Generated by "make dkms-source". Do not edit.'; \
 		echo "# Profile: $(PROFILE)"; \
@@ -430,13 +477,16 @@ dkms-source: check-dkms-version check-snapshot
 		echo ''; \
 		echo 'USB_MODULES := $(USB_MODULES)'; \
 		echo 'USB_KCONFIG := $(USB_KCONFIG)'; \
+		echo 'USB_CFLAGS := $(USB_CFLAGS)'; \
 		echo 'FE_MODULES := $(FE_MODULES)'; \
 		echo 'FE_KCONFIG := $(FE_KCONFIG)'; \
+		echo 'FE_CFLAGS := $(FE_CFLAGS)'; \
 		echo 'TUNER_MODULES := $(TUNER_MODULES)'; \
 		echo 'TUNER_KCONFIG := $(TUNER_KCONFIG)'; \
+		echo 'TUNER_CFLAGS := $(TUNER_CFLAGS)'; \
 		echo 'PROFILE_CFLAGS := $(PROFILE_CFLAGS)'; \
 		echo ''; \
-		echo '# DKMS invokes MAKE[0] without a target and rewrites a leading'; \
+		echo '# DKMS calls MAKE[0] without a target and rewrites a leading'; \
 		echo '# "make" into "make -j<n> KERNELRELEASE=<kver>", so the default'; \
 		echo '# goal has to build everything.'; \
 		echo '.DEFAULT_GOAL := all'; \
@@ -451,7 +501,6 @@ dkms-source: check-dkms-version check-snapshot
 		echo 'AUTOINSTALL="yes"'; \
 		echo ''; \
 		echo 'MAKE[0]="make KDIR=$${kernel_source_dir} KVER=$${kernelver}"'; \
-		echo 'CLEAN="make KDIR=$${kernel_source_dir} KVER=$${kernelver} clean"'; \
 		echo ''; \
 		i=0; \
 		for m in $(USB_MODULES); do \
@@ -476,33 +525,28 @@ dkms-source: check-dkms-version check-snapshot
 			i=$$((i + 1)); \
 		done; \
 	} > "$(DKMS_SRC)/dkms.conf"; \
+	head_sha=$$(git -C "$(LINUX_MEDIA)" rev-parse "$(LINUX_MEDIA_REF)"); \
 	{ \
 		echo "profile: $(PROFILE)"; \
 		echo "package: $(DKMS_PACKAGE)"; \
 		echo "version: $(DKMS_VERSION)"; \
 		echo "linux_media_url: $(LINUX_MEDIA_URL)"; \
 		echo "linux_media_ref: $(LINUX_MEDIA_REF)"; \
-		echo "linux_media_head: $$(git -C "$(LINUX_MEDIA)" rev-parse HEAD)"; \
+		echo "linux_media_commit: $$head_sha"; \
 		echo ''; \
-		echo "commits above $(LINUX_MEDIA_REF):"; \
-		git -C "$(LINUX_MEDIA)" log --oneline "$(LINUX_MEDIA_REF)..HEAD" \
-			| sed 's/^/  /'; \
-		echo ''; \
-		echo "patch series:"; \
+		echo "patch series applied on top:"; \
 		if [ -s "$(PATCH_SERIES)" ]; then \
 			sed 's/^/  /' "$(PATCH_SERIES)"; \
 		else \
 			echo "  (none)"; \
 		fi; \
+		echo ''; \
+		echo "Reproduce with:"; \
+		echo "  git clone $(LINUX_MEDIA_URL)"; \
+		echo "  git archive $(LINUX_MEDIA_REF) -- $(DKMS_DIRS)"; \
+		echo "  then apply the series above with 'git apply -p1'"; \
 	} > "$(DKMS_SRC)/PROVENANCE"; \
 	echo "Wrote $(DKMS_SRC)"
-
-DKMS_DEB_PACKAGE ?= $(DKMS_PACKAGE)-dkms
-DEB_TEMPLATE_DIR := $(BASE)/packaging/debian
-DEB_HOST_ID ?= $(shell hostname)
-DEB_MAINTAINER ?= linux-media packaging <linux-media@$(DEB_HOST_ID)>
-DKMS_FIRMWARE := $(strip $(FIRMWARE) $(FIRMWARES))
-DKMS_MODULE_NAMES := $(basename $(OUTPUT_MODULES))
 
 check-deb-tools:
 	@for t in dpkg-buildpackage dh_dkms; do \
@@ -515,30 +559,35 @@ check-deb-tools:
 
 dkms-deb: check-deb-tools dkms-source
 	@set -eu; \
-	deb_dir="$(DKMS_SRC)/debian"; \
+	src="$(abspath $(DKMS_SRC))"; \
+	dist="$(abspath $(OUT_DIST))"; \
+	build_dir="$$(dirname "$$src")"; \
+	deb_dir="$$src/debian"; \
 	rm -rf "$$deb_dir"; \
-	mkdir -p "$$deb_dir/source"; \
-	fw_list="$(DKMS_FIRMWARE)"; \
+	mkdir -p "$$deb_dir/source" "$$dist"; \
+	esc() { printf '%s' "$$1" | sed -e 's/[\\&|]/\\&/g'; }; \
+	fw_files="$(strip $(FIRMWARE) $(FIRMWARES))"; \
+	fw_list="$$fw_files"; \
 	if [ -z "$$fw_list" ]; then fw_list="(none required)"; fi; \
-	subst="s|@MODULE@|$(DKMS_PACKAGE)|g; \
-		s|@PACKAGE@|$(DKMS_DEB_PACKAGE)|g; \
-		s|@VERSION@|$(DKMS_VERSION)|g; \
-		s|@PROFILE@|$(PROFILE)|g; \
-		s|@MAINTAINER@|$(DEB_MAINTAINER)|g; \
-		s|@DATE@|$$(date -R)|g; \
-		s|@FIRMWARE_FILES@|$(DKMS_FIRMWARE)|g; \
-		s|@FIRMWARE_LIST@|$$fw_list|g; \
-		s|@OVERRIDE_LIST@|$(DKMS_MODULE_NAMES)|g"; \
+	subst="s|@MODULE@|$$(esc '$(DKMS_PACKAGE)')|g; \
+		s|@PACKAGE@|$$(esc '$(DKMS_DEB_PACKAGE)')|g; \
+		s|@VERSION@|$$(esc '$(DKMS_VERSION)')|g; \
+		s|@PROFILE@|$$(esc '$(PROFILE)')|g; \
+		s|@MAINTAINER@|$$(esc '$(DEB_MAINTAINER)')|g; \
+		s|@DATE@|$$(esc "$$(date -R)")|g; \
+		s|@FIRMWARE_FILES@|$$(esc "$$fw_files")|g; \
+		s|@FIRMWARE_LIST@|$$(esc "$$fw_list")|g; \
+		s|@OVERRIDE_LIST@|$$(esc '$(DKMS_MODULE_NAMES)')|g"; \
 	for f in control rules changelog copyright README.Debian; do \
 		sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/$$f" > "$$deb_dir/$$f"; \
 	done; \
 	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/postinst" \
 		> "$$deb_dir/$(DKMS_DEB_PACKAGE).postinst"; \
 	cp "$(DEB_TEMPLATE_DIR)/source/format" "$$deb_dir/source/format"; \
-	cp "$(DKMS_SRC)/dkms.conf" "$$deb_dir/$(DKMS_DEB_PACKAGE).dkms"; \
+	cp "$$src/dkms.conf" "$$deb_dir/$(DKMS_DEB_PACKAGE).dkms"; \
 	chmod +x "$$deb_dir/rules" "$$deb_dir/$(DKMS_DEB_PACKAGE).postinst"; \
-	mkdir -p "$(OUT_DIST)"; \
-	cd "$(DKMS_SRC)" && dpkg-buildpackage -us -uc -b; \
-	mv "$(OUT_BASE)/dkms/$(DKMS_DEB_PACKAGE)_$(DKMS_VERSION)_all.deb" \
-		"$(OUT_DIST)/"; \
-	echo "Wrote $(OUT_DIST)/$(DKMS_DEB_PACKAGE)_$(DKMS_VERSION)_all.deb"
+	( cd "$$src" && dpkg-buildpackage -us -uc -b ); \
+	mv "$$build_dir/$(DKMS_DEB_PACKAGE)_$(DKMS_VERSION)_all.deb" "$$dist/"; \
+	rm -f "$$build_dir/$(DKMS_PACKAGE)_$(DKMS_VERSION)_"*.buildinfo \
+		"$$build_dir/$(DKMS_PACKAGE)_$(DKMS_VERSION)_"*.changes; \
+	echo "Wrote $$dist/$(DKMS_DEB_PACKAGE)_$(DKMS_VERSION)_all.deb"
