@@ -625,7 +625,8 @@ dkms-deb: check-deb-tools dkms-source
 		s|@VERSION@|$$(esc "$$v_version")|g; \
 		s|@PROFILE@|$$(esc "$$v_profile")|g; \
 		s|@MAINTAINER@|$$(esc "$$v_maint")|g; \
-		s|@DATE@|$$(esc "$$(date -R)")|g; \
+		s|@DATE@|$$(esc "$$(date -R -d @$${SOURCE_DATE_EPOCH:-$$(git -C \
+			"$(BASE)" log -1 --format=%ct 2>/dev/null || date +%s)})")|g; \
 		s|@FIRMWARE_FILES@|$$(esc "$$fw_files")|g; \
 		s|@FIRMWARE_LIST@|$$(esc "$$fw_list")|g; \
 		s|@OVERRIDE_LIST@|$$(esc "$$v_over")|g"; \
@@ -637,23 +638,49 @@ dkms-deb: check-deb-tools dkms-source
 			case "$$lic" in \
 				GPL-2.0) lic=GPL-2.0-only ;; \
 				GPL-2.0+) lic=GPL-2.0-or-later ;; \
-				'') lic=UNSPECIFIED ;; \
+				'') \
+					if grep -qi 'any later version' "$$f"; then \
+						lic=UNSPECIFIED-or-later; \
+					else \
+						lic=UNSPECIFIED-only; \
+					fi ;; \
 			esac; \
 			printf '%s\t%s\n' "$$lic" "$$f"; \
 		done ) | sort > "$$deb_dir/.lic-map"; \
 	for lic in $$(cut -f1 "$$deb_dir/.lic-map" | sort -u); do \
+		awk -F'\t' -v l="$$lic" '$$1==l {print $$2}' \
+			"$$deb_dir/.lic-map" > "$$deb_dir/.files"; \
+		( cd "$$src" && while read -r f; do \
+			sed -n '1,60p' "$$f" | grep -i 'copyright' || true; \
+		  done < "$$deb_dir/.files" ) \
+		| sed -e 's|^[[:space:]/*#]*||' -e 's|[[:space:]]*\*/[[:space:]]*$$||' \
+			-e 's|[[:space:]][[:space:]]*| |g' \
+			-e 's|^[[:space:]]*||' -e 's|[[:space:]]*$$||' \
+			-e 's|^[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt][[:space:]]*||' \
+			-e 's|^(c)[[:space:]]*||I' -e 's|^[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt]||' \
+		| grep -vE '^[[:space:]]*$$' | sort -u > "$$deb_dir/.holders"; \
 		{ \
 			printf 'Files:'; \
-			awk -F'\t' -v l="$$lic" '$$1==l {printf " %s\n", $$2}' \
-				"$$deb_dir/.lic-map" | sed 's/^ /       /'; \
-			echo "Copyright: The Linux kernel authors and TBS Technologies"; \
-			if [ "$$lic" = "UNSPECIFIED" ]; then \
-				echo "License: GPL-2.0-only"; \
-				echo "Comment: No SPDX identifier in the file; the Linux"; \
-				echo " kernel default of GPL-2.0-only is assumed."; \
+			sed 's/^/       /' "$$deb_dir/.files"; \
+			if [ -s "$$deb_dir/.holders" ]; then \
+				printf 'Copyright:\n'; \
+				sed 's/^/ /' "$$deb_dir/.holders"; \
 			else \
-				echo "License: $$lic"; \
+				echo "Copyright: no copyright notice in these files"; \
 			fi; \
+			case "$$lic" in \
+				UNSPECIFIED-or-later) \
+					echo "License: GPL-2.0-or-later"; \
+					echo "Comment: No SPDX identifier in these files. Their"; \
+					echo " licence text offers version 2 or, at the user's"; \
+					echo " option, any later version."; ;; \
+				UNSPECIFIED-only) \
+					echo "License: GPL-2.0-only"; \
+					echo "Comment: No SPDX identifier in these files and no"; \
+					echo " later-version clause in their licence text; the"; \
+					echo " Linux kernel default of GPL-2.0-only is assumed."; ;; \
+				*) echo "License: $$lic"; ;; \
+			esac; \
 			echo ""; \
 		} >> "$$stanzas"; \
 	done; \
@@ -664,7 +691,8 @@ dkms-deb: check-deb-tools dkms-source
 		| awk -v s="$$stanzas" '/@DRIVER_STANZAS@/ { \
 			while ((getline line < s) > 0) print line; next } 1' \
 		> "$$deb_dir/copyright"; \
-	rm -f "$$stanzas" "$$deb_dir/.lic-map"; \
+	rm -f "$$stanzas" "$$deb_dir/.lic-map" "$$deb_dir/.files" \
+		"$$deb_dir/.holders"; \
 	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/postinst" \
 		> "$$deb_dir/$(DKMS_DEB_PACKAGE).postinst"; \
 	cp "$(DEB_TEMPLATE_DIR)/source/format" "$$deb_dir/source/format"; \
@@ -674,4 +702,5 @@ dkms-deb: check-deb-tools dkms-source
 	mv "$$build_dir/$(DKMS_DEB_PACKAGE)_$(DKMS_VERSION)_all.deb" "$$dist/"; \
 	rm -f "$$build_dir/$(DKMS_PACKAGE)_$(DKMS_VERSION)_"*.buildinfo \
 		"$$build_dir/$(DKMS_PACKAGE)_$(DKMS_VERSION)_"*.changes; \
+	rm -rf "$$deb_dir"; \
 	echo "Wrote $$dist/$(DKMS_DEB_PACKAGE)_$(DKMS_VERSION)_all.deb"

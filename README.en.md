@@ -65,7 +65,10 @@ and reports possible blacklists (modprobe.d, kernel parameters).
   The DKMS route deliberately does -- see *Automating the rebuild (DKMS)*.
 - Modules are kernel-specific and only valid for the exact same KVER.
   That is exactly what the DKMS route is for.
-- Secure Boot: unsigned modules must be allowed.
+- Secure Boot: the tarball route produces unsigned modules, which have to be
+  allowed. The DKMS route signs with a key it generates itself
+  (`/var/lib/dkms/mok.key`); there you need the MOK enrolment instead:
+  `sudo mokutil --import /var/lib/dkms/mok.pub`.
 
 ## Kernel update (rebuild, tarball fallback only)
 
@@ -109,7 +112,10 @@ modules. The fix is the rebuild above, not `rmmod`/`modprobe`.
 ## Automating the rebuild (DKMS)
 
 Implemented (as of 2026-08-23). DKMS rebuilds the modules for every kernel
-update, including unattended apt upgrades. `modprobe` and udev then load them
+update, including unattended apt upgrades -- as long as the sources still build
+against the new kernel API. An API break (a jump to a new Debian release, say)
+needs updated sources like any out-of-tree driver; DKMS then fails silently and
+the tuner is missing. `modprobe` and udev then load them
 on their own -- `tbs5580-modules.service` and `load-tbs5580.sh` are no longer
 needed.
 
@@ -165,13 +171,37 @@ make dkms-deb PROFILE=tbs5580
 
 Result: `out/dist/linux-media-tbs5580-dkms_<version>_all.deb`. The package
 depends hard on `dkms` and on a headers meta package
-(`linux-headers-amd64 | linux-headers-generic`), so the target machine cannot
-end up in the same broken state. The tuner firmware is proprietary and must not
+(`linux-headers-amd64 | linux-headers-arm64 | linux-headers-generic`), so the
+target machine cannot end up in the same broken state. Special kernels (HWE,
+cloud, lowlatency, self-built) do not necessarily get their headers through one
+of these meta packages; there they have to be matched by hand.
+
+Maintainer field and version can be set at build time:
+
+```
+make dkms-deb PROFILE=tbs5580 DEB_MAINTAINER='Name <mail@example.org>'
+```
+
+Without it the hostname is used. The package is reproducible: the changelog
+date comes from `SOURCE_DATE_EPOCH` or the last commit, not from the clock. The tuner firmware is proprietary and must not
 be shipped, so it is not included; the `postinst` warns when it is missing,
 details in `README.Debian`.
 
 The Debian templates live in `packaging/debian/` and are filled in at build
 time with profile, version, maintainer and firmware list.
+
+### Migrating from the tarball route
+
+If you used `tbs5580-modules.service` before, switch it off -- otherwise it
+loads the old modules from `out/` on the next boot and shadows the ones DKMS
+installed:
+
+```
+sudo systemctl disable --now tbs5580-modules.service
+```
+
+Neither the package nor a make target does this for you; it changes the system
+and stays a manual step.
 
 ### What it costs
 

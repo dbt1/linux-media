@@ -65,7 +65,10 @@ und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
   Der DKMS-Weg tut es bewusst -- siehe *Rebuild automatisieren (DKMS)*.
 - Module sind kernel-spezifisch und gelten nur fuer den exakt gleichen KVER.
   Genau deshalb gibt es den DKMS-Weg.
-- Secure Boot: Unsigned Modules muessen erlaubt sein.
+- Secure Boot: Der Tarball-Weg liefert unsignierte Module, die erlaubt sein
+  muessen. Der DKMS-Weg signiert dagegen mit einem selbst erzeugten Schluessel
+  (`/var/lib/dkms/mok.key`); dort ist statt dessen das MOK-Enrolment noetig:
+  `sudo mokutil --import /var/lib/dkms/mok.pub`.
 
 ## Kernel-Update (Rebuild, nur Tarball-Fallback)
 
@@ -110,7 +113,10 @@ Module. Der Fix ist der Rebuild oben, nicht `rmmod`/`modprobe`.
 ## Rebuild automatisieren (DKMS)
 
 Umgesetzt (Stand 2026-08-23). DKMS baut die Module bei jedem Kernel-Update
-automatisch mit, auch bei unbeaufsichtigten apt-Upgrades. `modprobe` und udev
+automatisch mit, auch bei unbeaufsichtigten apt-Upgrades -- solange die Quellen
+gegen die neue Kernel-API bauen. Ein API-Bruch (etwa bei einem Sprung auf eine
+neue Debian-Version) braucht wie bei jedem Out-of-Tree-Treiber nachgezogene
+Quellen; DKMS scheitert dann still und der Tuner fehlt. `modprobe` und udev
 laden sie dann selbst -- `tbs5580-modules.service` und `load-tbs5580.sh` werden
 nicht mehr gebraucht.
 
@@ -166,13 +172,38 @@ make dkms-deb PROFILE=tbs5580
 
 Ergebnis: `out/dist/linux-media-tbs5580-dkms_<version>_all.deb`. Das Paket
 haengt hart an `dkms` und an einem Header-Metapaket
-(`linux-headers-amd64 | linux-headers-generic`), damit auf dem Zielrechner
-nicht derselbe Zustand entsteht. Die Tuner-Firmware ist proprietaer und darf
+(`linux-headers-amd64 | linux-headers-arm64 | linux-headers-generic`), damit
+auf dem Zielrechner nicht derselbe Zustand entsteht. Sonderkernel (HWE, cloud,
+lowlatency, selbstgebaut) bringen ihre Header nicht zwingend ueber eines
+dieser Metapakete mit -- dort muessen sie von Hand passen.
+
+Maintainer-Feld und Version lassen sich beim Bauen setzen:
+
+```
+make dkms-deb PROFILE=tbs5580 DEB_MAINTAINER='Name <mail@example.org>'
+```
+
+Ohne Angabe wird der Hostname verwendet. Das Paket ist reproduzierbar: das
+Changelog-Datum stammt aus `SOURCE_DATE_EPOCH` bzw. dem letzten Commit, nicht
+aus der Uhr. Die Tuner-Firmware ist proprietaer und darf
 nicht mitgeliefert werden; das `postinst` warnt bei Abwesenheit, Details in
 `README.Debian`.
 
 Die Debian-Vorlagen liegen unter `packaging/debian/` und werden beim Bauen mit
 Profil, Version, Maintainer und Firmwareliste gefuellt.
+
+### Umstieg von der Tarball-Variante
+
+Wer vorher `tbs5580-modules.service` benutzt hat, sollte ihn abschalten -- sonst
+laedt er beim naechsten Boot die alten Module aus `out/` und beschattet die von
+DKMS installierten:
+
+```
+sudo systemctl disable --now tbs5580-modules.service
+```
+
+Weder das Paket noch ein Make-Ziel tut das automatisch; es ist ein Eingriff ins
+System und bleibt Handarbeit.
 
 ### Was das kostet
 

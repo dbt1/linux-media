@@ -29,6 +29,14 @@ replaces it for *all* devices that use it, not only for this tuner. On a host
 with other DVB hardware, check that those devices still work after installing
 this package.
 
+Profiles that build the same modules
+------------------------------------
+
+Some tuner profiles produce the same module names. t230 and t210 both build
+dvb_usb_v2, dvb-usb-dvbsky, si2168 and si2157, so their packages would install
+the same files. Do not install two such packages on one machine; there is no
+Conflicts declaration that would stop you.
+
 Secure Boot
 -----------
 
