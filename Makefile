@@ -351,6 +351,10 @@ package: build
 		$(OUTPUT_MODULES) artifacts.txt INSTALL.txt
 	@echo "Wrote $(OUT_DIST)/$(PROFILE)-k$(KVER).tar.xz"
 
+# Without a profile the module lists are empty and clean would silently do
+# nothing; that used to look like success.
+clean: check-profile
+
 print-profile-vars: check-profile
 	@echo "USB_DIR=$(USB_DIR)"
 	@echo "FE_DIR=$(FE_DIR)"
@@ -364,6 +368,7 @@ check:
 
 print-vars:
 	@echo "PROFILE=$(PROFILE)"
+	@echo "DKMS_SRC=$(DKMS_SRC)"
 	@echo "KVER=$(KVER)"
 	@echo "KDIR=$(KDIR)"
 	@echo "LINUX_MEDIA=$(LINUX_MEDIA)"
@@ -387,10 +392,28 @@ DEB_MAINTAINER ?= linux-media packaging <linux-media@$(DEB_HOST_ID)>
 DKMS_MODULE_NAMES := $(basename $(OUTPUT_MODULES))
 
 check-dkms-version:
-	@if [ -z "$(DKMS_VERSION)" ]; then \
+	@set -eu; \
+	if [ -z "$(DKMS_VERSION)" ]; then \
 		echo "Missing or empty version file: $(VERSION_FILE)"; \
 		exit 2; \
-	fi
+	fi; \
+	for v in '$(DKMS_PACKAGE)' '$(DKMS_VERSION)'; do \
+		case "$$v" in \
+			*/*|*..*|'') \
+				echo "Refusing unsafe package/version component: $$v"; \
+				exit 2 ;; \
+		esac; \
+	done; \
+	out=$$(realpath -m -- "$(DKMS_OUT)"); \
+	src=$$(realpath -m -- "$(DKMS_SRC)"); \
+	case "$$src" in \
+		"$$out"/?*) ;; \
+		*) \
+			echo "DKMS_SRC must live under DKMS_OUT, refusing to touch it:"; \
+			echo "  DKMS_OUT=$$out"; \
+			echo "  DKMS_SRC=$$src"; \
+			exit 2 ;; \
+	esac
 
 check-dkms-profile: check-profile
 	@if [ -z "$(strip $(OUTPUT_MODULES))" ]; then \
@@ -421,16 +444,34 @@ check-snapshot: check-profile check-linux-media
 		echo "Run: make fetch PROFILE=$(PROFILE)"; \
 		exit 2; \
 	fi; \
-	if [ -s "$(PATCH_SERIES)" ]; then \
-		while read -r p || [ -n "$$p" ]; do \
-			if [ -z "$$p" ]; then continue; fi; \
-			if [ ! -f "$(PATCH_DIR)/$$p" ]; then \
-				echo "Missing patch file: $(PATCH_DIR)/$$p"; \
+	if [ ! -f "$(PATCH_SERIES)" ]; then \
+		echo "Missing patch series file: $(PATCH_SERIES)"; \
+		echo "Create it (empty is fine) so the snapshot is explicit."; \
+		exit 2; \
+	fi; \
+	while read -r p || [ -n "$$p" ]; do \
+		if [ -z "$$p" ]; then continue; fi; \
+		if [ ! -f "$(PATCH_DIR)/$$p" ]; then \
+			echo "Missing patch file: $(PATCH_DIR)/$$p"; \
+			exit 2; \
+		fi; \
+		sed -n 's|^+++ b/||p; s|^--- a/||p' "$(PATCH_DIR)/$$p" \
+		| sed 's|[[:space:]].*$$||' | sort -u \
+		| while read -r f; do \
+			if [ -z "$$f" ] || [ "$$f" = "/dev/null" ]; then continue; fi; \
+			ok=0; \
+			for d in $(DKMS_DIRS); do \
+				case "$$f" in "$$d"/*) ok=1 ;; esac; \
+			done; \
+			if [ "$$ok" -eq 0 ]; then \
+				echo "Patch $$p touches $$f, outside the profile directories"; \
+				echo "The snapshot only carries: $(DKMS_DIRS)"; \
 				exit 2; \
 			fi; \
-		done < "$(PATCH_SERIES)"; \
-	fi; \
-	echo "Snapshot source: $(LINUX_MEDIA_REF) + $(PROFILE) patch series"
+		done; \
+	done < "$(PATCH_SERIES)"; \
+	sha=$$(git -C "$(LINUX_MEDIA)" rev-parse "$(LINUX_MEDIA_REF)^{commit}"); \
+	echo "Snapshot source: $$sha ($(LINUX_MEDIA_REF)) + $(PROFILE) patch series"
 
 dkms-source: check-dkms-version check-dkms-profile check-snapshot
 	@set -eu; \
@@ -557,30 +598,73 @@ check-deb-tools:
 		fi; \
 	done
 
+dkms-deb: export DKMS_V_MODULE = $(DKMS_PACKAGE)
+dkms-deb: export DKMS_V_PACKAGE = $(DKMS_DEB_PACKAGE)
+dkms-deb: export DKMS_V_VERSION = $(DKMS_VERSION)
+dkms-deb: export DKMS_V_PROFILE = $(PROFILE)
+dkms-deb: export DKMS_V_MAINT = $(DEB_MAINTAINER)
+dkms-deb: export DKMS_V_OVER = $(DKMS_MODULE_NAMES)
+dkms-deb: export DKMS_V_FW = $(strip $(FIRMWARE) $(FIRMWARES))
 dkms-deb: check-deb-tools dkms-source
 	@set -eu; \
-	src="$(abspath $(DKMS_SRC))"; \
-	dist="$(abspath $(OUT_DIST))"; \
+	src=$$(realpath -m -- "$(DKMS_SRC)"); \
+	dist=$$(realpath -m -- "$(OUT_DIST)"); \
 	build_dir="$$(dirname "$$src")"; \
 	deb_dir="$$src/debian"; \
 	rm -rf "$$deb_dir"; \
 	mkdir -p "$$deb_dir/source" "$$dist"; \
 	esc() { printf '%s' "$$1" | sed -e 's/[\\&|]/\\&/g'; }; \
-	fw_files="$(strip $(FIRMWARE) $(FIRMWARES))"; \
+	v_module=$$DKMS_V_MODULE; v_package=$$DKMS_V_PACKAGE; \
+	v_version=$$DKMS_V_VERSION; v_profile=$$DKMS_V_PROFILE; \
+	v_maint=$$DKMS_V_MAINT; v_over=$$DKMS_V_OVER; \
+	fw_files=$$DKMS_V_FW; \
 	fw_list="$$fw_files"; \
 	if [ -z "$$fw_list" ]; then fw_list="(none required)"; fi; \
-	subst="s|@MODULE@|$$(esc '$(DKMS_PACKAGE)')|g; \
-		s|@PACKAGE@|$$(esc '$(DKMS_DEB_PACKAGE)')|g; \
-		s|@VERSION@|$$(esc '$(DKMS_VERSION)')|g; \
-		s|@PROFILE@|$$(esc '$(PROFILE)')|g; \
-		s|@MAINTAINER@|$$(esc '$(DEB_MAINTAINER)')|g; \
+	subst="s|@MODULE@|$$(esc "$$v_module")|g; \
+		s|@PACKAGE@|$$(esc "$$v_package")|g; \
+		s|@VERSION@|$$(esc "$$v_version")|g; \
+		s|@PROFILE@|$$(esc "$$v_profile")|g; \
+		s|@MAINTAINER@|$$(esc "$$v_maint")|g; \
 		s|@DATE@|$$(esc "$$(date -R)")|g; \
 		s|@FIRMWARE_FILES@|$$(esc "$$fw_files")|g; \
 		s|@FIRMWARE_LIST@|$$(esc "$$fw_list")|g; \
-		s|@OVERRIDE_LIST@|$$(esc '$(DKMS_MODULE_NAMES)')|g"; \
-	for f in control rules changelog copyright README.Debian; do \
+		s|@OVERRIDE_LIST@|$$(esc "$$v_over")|g"; \
+	stanzas="$$deb_dir/.driver-stanzas"; \
+	: > "$$stanzas"; \
+	( cd "$$src" && find drivers -type f \
+		| sort | while read -r f; do \
+			lic=$$(sed -n '1,3s|.*SPDX-License-Identifier:[[:space:]]*\([A-Za-z0-9.+-]*\).*|\1|p' "$$f" | head -1); \
+			case "$$lic" in \
+				GPL-2.0) lic=GPL-2.0-only ;; \
+				GPL-2.0+) lic=GPL-2.0-or-later ;; \
+				'') lic=UNSPECIFIED ;; \
+			esac; \
+			printf '%s\t%s\n' "$$lic" "$$f"; \
+		done ) | sort > "$$deb_dir/.lic-map"; \
+	for lic in $$(cut -f1 "$$deb_dir/.lic-map" | sort -u); do \
+		{ \
+			printf 'Files:'; \
+			awk -F'\t' -v l="$$lic" '$$1==l {printf " %s\n", $$2}' \
+				"$$deb_dir/.lic-map" | sed 's/^ /       /'; \
+			echo "Copyright: The Linux kernel authors and TBS Technologies"; \
+			if [ "$$lic" = "UNSPECIFIED" ]; then \
+				echo "License: GPL-2.0-only"; \
+				echo "Comment: No SPDX identifier in the file; the Linux"; \
+				echo " kernel default of GPL-2.0-only is assumed."; \
+			else \
+				echo "License: $$lic"; \
+			fi; \
+			echo ""; \
+		} >> "$$stanzas"; \
+	done; \
+	for f in control rules changelog README.Debian; do \
 		sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/$$f" > "$$deb_dir/$$f"; \
 	done; \
+	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/copyright" \
+		| awk -v s="$$stanzas" '/@DRIVER_STANZAS@/ { \
+			while ((getline line < s) > 0) print line; next } 1' \
+		> "$$deb_dir/copyright"; \
+	rm -f "$$stanzas" "$$deb_dir/.lic-map"; \
 	sed -e "$$subst" "$(DEB_TEMPLATE_DIR)/postinst" \
 		> "$$deb_dir/$(DKMS_DEB_PACKAGE).postinst"; \
 	cp "$(DEB_TEMPLATE_DIR)/source/format" "$$deb_dir/source/format"; \

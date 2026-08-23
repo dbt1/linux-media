@@ -76,6 +76,7 @@ clean:
 		dir="$${pair%%:*}"; \
 		mods="$${pair#*:}"; \
 		if [ -n "$$mods" ]; then \
-			$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$$dir" clean; \
+			$(MAKE) -C "$(KDIR)" M="$(LINUX_MEDIA)/$$dir" clean \
+				|| exit $$?; \
 		fi; \
 	done

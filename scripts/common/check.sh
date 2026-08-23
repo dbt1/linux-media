@@ -1,6 +1,13 @@
 #!/bin/bash
-# Repo self-check. Runs for every profile and needs no root and no hardware.
+# Repo self-check. Runs for every profile, needs no root and no hardware.
 # Kernel headers are only required for the optional build check.
+#
+# Generation happens under out/.check, not in a temp directory: the snapshot
+# must be produced inside this git repository, because that is where real
+# users generate it and some failure modes only appear there (git apply, for
+# one, resolves patch paths against the enclosing repository and silently
+# ignores everything outside the current directory). The reference tree the
+# snapshot is compared against is built outside the repo on purpose.
 set -uo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -8,14 +15,24 @@ BASE_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 PROFILES="${PROFILES:-$(ls "$BASE_DIR/profiles"/*.mk | xargs -n1 basename | sed 's/\.mk$//')}"
 KVER="${KVER:-$(uname -r)}"
 KDIR="${KDIR:-/lib/modules/$KVER/build}"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+
+WORK="$(mktemp -d)" || { echo "mktemp failed"; exit 1; }
+[ -n "$WORK" ] && [ -d "$WORK" ] || { echo "no work directory"; exit 1; }
+CHECK_OUT="$BASE_DIR/out/.check"
+rm -rf "$CHECK_OUT"
+trap 'rm -rf "$WORK" "$CHECK_OUT"' EXIT
 
 fail=0
 pass() { printf '  ok   %s\n' "$*"; }
 bad()  { printf '  FAIL %s\n' "$*"; fail=1; }
 
-mk() { make -C "$BASE_DIR" "$@"; }
+# All sub-makes use the private tree.
+mk() { make -C "$BASE_DIR" OUT_BASE="$CHECK_OUT" "$@"; }
+
+# Ask make for the effective value instead of rebuilding the path here;
+# otherwise the check can happily verify a tree nobody else uses.
+var() { mk print-vars PROFILE="$1" 2>/dev/null | sed -n "s/^$2=//p"; }
+pvar() { mk print-profile-vars PROFILE="$1" 2>/dev/null | sed -n "s/^$2=//p"; }
 
 # 1. A bare `make` must print help, not start building.
 check_default_goal() {
@@ -28,127 +45,122 @@ check_default_goal() {
 	fi
 }
 
-# 2. dkms.conf must agree with the profile it was generated from.
+# 2. dkms.conf must agree, entry by entry, with the profile it came from.
 check_dkms_conf() {
-	local profile="$1" src conf n i name loc
-	src="$(mk print-vars PROFILE="$profile" 2>/dev/null | sed -n 's/^OUT_BASE=//p')"
-	src="$src/dkms/linux-media-$profile-$(cat "$BASE_DIR/VERSION")"
+	local profile="$1" src conf i=0 grp mods dir m
+	src="$(var "$profile" DKMS_SRC)"
 	conf="$src/dkms.conf"
 	[ -f "$conf" ] || { bad "$profile: no dkms.conf at $conf"; return; }
 
-	# expected: one entry per module, in USB, FE, TUNER order
-	local expect_names="" expect_locs=""
+	local expected="" got=""
 	for grp in USB FE TUNER; do
-		local mods dir
-		mods="$(mk print-profile-vars PROFILE="$profile" 2>/dev/null | sed -n "s/^${grp}_MODULES=//p")"
-		dir="$(mk print-profile-vars PROFILE="$profile" 2>/dev/null | sed -n "s/^${grp}_DIR=//p")"
+		mods="$(pvar "$profile" "${grp}_MODULES")"
+		dir="$(pvar "$profile" "${grp}_DIR")"
 		for m in $mods; do
-			expect_names="$expect_names ${m%.ko}"
-			expect_locs="$expect_locs $dir"
+			expected="$expected$i|${m%.ko}|$dir|/updates/dkms"$'\n'
+			i=$((i + 1))
 		done
 	done
+	[ "$i" -gt 0 ] || { bad "$profile: profile declares no modules"; return; }
 
-	local got_names got_locs
-	got_names="$(sed -n 's/^BUILT_MODULE_NAME\[[0-9]*\]="\(.*\)"$/\1/p' "$conf" | tr '\n' ' ')"
-	got_locs="$(sed -n 's/^BUILT_MODULE_LOCATION\[[0-9]*\]="\(.*\)"$/\1/p' "$conf" | tr '\n' ' ')"
+	# rebuild the same tuples straight out of dkms.conf
+	got="$(awk -F'[][]|="|"$' '
+		/^BUILT_MODULE_NAME\[/     { n[$2] = $4 }
+		/^BUILT_MODULE_LOCATION\[/ { l[$2] = $4 }
+		/^DEST_MODULE_LOCATION\[/  { d[$2] = $4 }
+		END { for (k = 0; k in n || k in l || k in d; k++)
+			printf "%s|%s|%s|%s\n", k, n[k], l[k], d[k] }' "$conf")"
 
-	if [ "$(echo $expect_names)" = "$(echo $got_names)" ]; then
-		pass "$profile: BUILT_MODULE_NAME matches profile"
+	if [ "$expected" = "$got"$'\n' ]; then
+		pass "$profile: dkms.conf entries match the profile ($i modules)"
 	else
-		bad "$profile: BUILT_MODULE_NAME '$got_names' != '$expect_names'"
-	fi
-	if [ "$(echo $expect_locs)" = "$(echo $got_locs)" ]; then
-		pass "$profile: BUILT_MODULE_LOCATION matches profile"
-	else
-		bad "$profile: BUILT_MODULE_LOCATION '$got_locs' != '$expect_locs'"
+		bad "$profile: dkms.conf does not match the profile"
+		diff <(printf '%s' "$expected") <(printf '%s\n' "$got") | sed 's/^/       /'
 	fi
 
-	# every declared module must have an index, and indices must be dense
-	n="$(grep -c '^BUILT_MODULE_NAME\[' "$conf")"
-	i=0
-	while [ "$i" -lt "$n" ]; do
-		grep -q "^BUILT_MODULE_NAME\[$i\]=" "$conf" || bad "$profile: missing index $i"
-		grep -q "^DEST_MODULE_LOCATION\[$i\]=\"/updates/dkms\"" "$conf" \
-			|| bad "$profile: index $i has no /updates/dkms destination"
-		i=$((i + 1))
-	done
-	[ "$n" -gt 0 ] || bad "$profile: dkms.conf declares no modules"
-
-	# MAKE[0] must start with the literal "make": dkms rewrites that prefix
+	# dkms rewrites a leading "make"; anything else loses -j and KERNELRELEASE
 	grep -q '^MAKE\[0\]="make ' "$conf" \
 		&& pass "$profile: MAKE[0] starts with literal make" \
-		|| bad "$profile: MAKE[0] must start with 'make' for dkms to inject -j/KERNELRELEASE"
+		|| bad "$profile: MAKE[0] must start with 'make'"
 }
 
-# 3. The snapshot must not contain build artifacts or subdirectories.
-check_snapshot_clean() {
-	local profile="$1" src stray
-	src="$(mk print-vars PROFILE="$profile" 2>/dev/null | sed -n 's/^OUT_BASE=//p')"
-	src="$src/dkms/linux-media-$profile-$(cat "$BASE_DIR/VERSION")"
+# 3. The snapshot must be exactly "pinned ref + series", nothing else.
+# Built independently here, so a bug in dkms-source cannot hide itself.
+check_snapshot_matches_source() {
+	local profile="$1" src ref want dirs d p series
+	src="$(var "$profile" DKMS_SRC)"
 	[ -d "$src" ] || { bad "$profile: no snapshot at $src"; return; }
+	ref="$(grep '^linux_media_ref: ' "$src/PROVENANCE" | cut -d' ' -f2)"
+	dirs="$(pvar "$profile" USB_DIR) $(pvar "$profile" FE_DIR)"
+	dirs="$dirs $(pvar "$profile" TUNER_DIR) drivers/media/common"
+	want="$WORK/want-$profile"
+	mkdir -p "$want"
 
-	stray="$(find "$src/drivers" -name '*.mod.c' -o -name '*.o' -o -name '*.ko' 2>/dev/null | wc -l)"
-	[ "$stray" -eq 0 ] && pass "$profile: snapshot free of build artifacts" \
-		|| bad "$profile: snapshot contains $stray build artifacts"
+	git -C "$BASE_DIR/linux_media" archive --format=tar "$ref" -- $dirs \
+		2>/dev/null | tar -x -C "$want" || {
+		bad "$profile: cannot archive $ref"; return; }
 
-	local dirs d
-	dirs="$(mk print-profile-vars PROFILE="$profile" 2>/dev/null \
-		| sed -n 's/^\(USB\|FE\|TUNER\)_DIR=//p' | sort -u)"
-	stray=0
-	for d in $dirs drivers/media/common; do
-		[ -d "$src/$d" ] || continue
-		stray=$((stray + $(find "$src/$d" -mindepth 1 -type d 2>/dev/null | wc -l)))
+	series="$BASE_DIR/patches/$profile/series"
+	if [ -s "$series" ]; then
+		while read -r p || [ -n "$p" ]; do
+			[ -n "$p" ] || continue
+			patch -p1 -d "$want" --forward --silent \
+				--no-backup-if-mismatch < "$BASE_DIR/patches/$profile/$p" \
+				|| { bad "$profile: reference patch $p failed"; return; }
+		done < "$series"
+	fi
+
+	for d in $(echo $dirs | tr ' ' '\n' | sort -u); do
+		[ -d "$want/$d" ] || continue
+		find "$want/$d" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+		find "$want/$d" -maxdepth 1 -type f \
+			! -name '*.c' ! -name '*.h' ! -name 'Makefile' \
+			! -name 'Kconfig' -delete
 	done
-	[ "$stray" -eq 0 ] && pass "$profile: no subdirectories inside driver dirs" \
-		|| bad "$profile: $stray unexpected subdirectories inside driver dirs"
+
+	if diff -r -q "$want/drivers" "$src/drivers" >"$WORK/diff-$profile" 2>&1; then
+		pass "$profile: snapshot == pinned ref + patch series"
+	else
+		bad "$profile: snapshot differs from ref+series"
+		head -5 "$WORK/diff-$profile" | sed 's/^/       /'
+	fi
 }
 
-# 3b. Every patch of the series must actually be present in the snapshot.
-# git apply silently ignores paths when run inside another repository and
-# still exits 0, so "the command succeeded" is not evidence here.
-check_patches_applied() {
-	local profile="$1" src series pdir p
-	src="$(mk print-vars PROFILE="$profile" 2>/dev/null | sed -n 's/^OUT_BASE=//p')"
-	src="$src/dkms/linux-media-$profile-$(cat "$BASE_DIR/VERSION")"
-	series="$BASE_DIR/patches/$profile/series"
-	pdir="$BASE_DIR/patches/$profile"
-	if [ ! -s "$series" ]; then
-		pass "$profile: no patch series to verify"
+# 4. The generated tree must build under the command line dkms actually uses,
+# and produce exactly the modules dkms.conf promises.
+check_dkms_build() {
+	local profile="$1" src work expected got m
+	src="$(var "$profile" DKMS_SRC)"
+	work="$WORK/build-$profile"
+	cp -a "$src" "$work" || { bad "$profile: cannot copy snapshot"; return; }
+	rm -rf "$work/debian"
+	if ! make -C "$work" -j"$(nproc)" KERNELRELEASE="$KVER" \
+		KDIR="$KDIR" KVER="$KVER" >"$WORK/build-$profile.log" 2>&1; then
+		bad "$profile: build failed"
+		tail -12 "$WORK/build-$profile.log" | sed 's/^/       /'
 		return
 	fi
-	while read -r p || [ -n "$p" ]; do
-		[ -n "$p" ] || continue
-		# reverse-apply must succeed if and only if the patch is in place
-		if patch -p1 -d "$src" --dry-run --reverse --silent \
-			< "$pdir/$p" >/dev/null 2>&1; then
-			pass "$profile: $p present in snapshot"
+	# every BUILT_MODULE_NAME must exist at its BUILT_MODULE_LOCATION
+	expected="$(awk -F'[][]|="|"$' '
+		/^BUILT_MODULE_NAME\[/     { n[$2] = $4 }
+		/^BUILT_MODULE_LOCATION\[/ { l[$2] = $4 }
+		END { for (k = 0; k in n; k++) printf "%s/%s.ko\n", l[k], n[k] }' \
+		"$src/dkms.conf")"
+	got=0
+	for m in $expected; do
+		if [ -f "$work/$m" ]; then
+			got=$((got + 1))
 		else
-			bad "$profile: $p NOT applied in snapshot"
+			bad "$profile: dkms.conf promises $m, build did not produce it"
 		fi
-	done < "$series"
-}
-
-# 4. The generated tree must build under the command line dkms actually uses.
-check_dkms_build() {
-	local profile="$1" src work
-	src="$(mk print-vars PROFILE="$profile" 2>/dev/null | sed -n 's/^OUT_BASE=//p')"
-	src="$src/dkms/linux-media-$profile-$(cat "$BASE_DIR/VERSION")"
-	work="$WORK/build-$profile"
-	cp -a "$src" "$work"
-	rm -rf "$work/debian"
-	# exactly how dkms invokes it, see /usr/sbin/dkms (MAKE[0] rewrite)
-	if make -C "$work" -j"$(nproc)" KERNELRELEASE="$KVER" \
-		KDIR="$KDIR" KVER="$KVER" >"$WORK/build-$profile.log" 2>&1; then
-		local n
-		n="$(find "$work" -name '*.ko' | wc -l)"
-		pass "$profile: builds under dkms invocation ($n modules)"
-	else
-		bad "$profile: build failed, see $WORK/build-$profile.log"
-		tail -15 "$WORK/build-$profile.log"
-	fi
+	done
+	[ "$got" -gt 0 ] && [ "$got" -eq "$(echo "$expected" | wc -l)" ] \
+		&& pass "$profile: builds under dkms invocation ($got/$got modules)"
 }
 
 echo "Profiles: $PROFILES"
+echo "Generated in: $CHECK_OUT (inside the repo, on purpose)"
+echo "Reference in: $WORK (outside the repo)"
 echo
 echo "Makefile:"
 check_default_goal
@@ -156,14 +168,13 @@ check_default_goal
 for p in $PROFILES; do
 	echo
 	echo "Profile $p:"
-	if ! mk dkms-source PROFILE="$p" >/dev/null 2>&1; then
+	if ! mk dkms-source PROFILE="$p" >"$WORK/gen-$p.log" 2>&1; then
 		bad "$p: make dkms-source failed"
-		mk dkms-source PROFILE="$p" 2>&1 | tail -5
+		tail -5 "$WORK/gen-$p.log" | sed 's/^/       /'
 		continue
 	fi
 	check_dkms_conf "$p"
-	check_snapshot_clean "$p"
-	check_patches_applied "$p"
+	check_snapshot_matches_source "$p"
 	if [ -d "$KDIR" ]; then
 		check_dkms_build "$p"
 	else

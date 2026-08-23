@@ -32,10 +32,15 @@ this package.
 Secure Boot
 -----------
 
-DKMS builds unsigned modules by default. On a machine with Secure Boot
-enabled the kernel refuses to load them, and the tuner stays absent even
-though "dkms status" reports success. Either enrol a MOK and configure DKMS
-to sign (see /usr/share/doc/dkms/README.Debian), or turn Secure Boot off.
+DKMS signs the modules with a key it generates itself, by default
+/var/lib/dkms/mok.key with the certificate in /var/lib/dkms/mok.pub. That
+signature only counts once the certificate is enrolled in the firmware:
+
+    sudo mokutil --import /var/lib/dkms/mok.pub
+
+and confirm the enrolment during the next boot. Until then a Secure Boot
+machine refuses to load the modules and the tuner stays absent, even though
+"dkms status" reports success. Turning Secure Boot off works too.
 
 Source
 ------
