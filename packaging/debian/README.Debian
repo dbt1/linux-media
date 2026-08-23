@@ -1,0 +1,35 @@
+@PACKAGE@ for Debian
+====================
+
+Firmware
+--------
+
+This package does not ship tuner firmware. The vendor firmware is proprietary
+and carries no redistribution grant, so it cannot be part of this package. The
+administrator has to install it.
+
+The @PROFILE@ profile needs one of: @FIRMWARE_LIST@
+
+Place the file in /lib/firmware/ and reload the module, or replug the device.
+Some of these files are shipped by Debian in firmware-linux-nonfree or
+firmware-misc-nonfree; the rest come from the tuner vendor.
+
+Module override
+---------------
+
+DKMS installs into /lib/modules/<kernel>/updates/dkms/, which takes precedence
+over the in-tree modules of the same name. For this profile that affects:
+@OVERRIDE_LIST@
+
+If a name above also exists in your running kernel, the out-of-tree version
+replaces it for *all* devices that use it, not only for this tuner. On a host
+with other DVB hardware, check that those devices still work after installing
+this package.
+
+Source
+------
+
+The driver sources are a reduced copy of https://github.com/tbsdtv/linux_media
+plus the patch series carried by this project. The exact commit and patch list
+used for this build are recorded in
+/usr/src/@MODULE@-@VERSION@/PROVENANCE.

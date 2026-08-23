@@ -1,0 +1,5 @@
+@MODULE@ (@VERSION@) unstable; urgency=medium
+
+  * DKMS packaging for the @PROFILE@ DVB modules.
+
+ -- @MAINTAINER@  @DATE@

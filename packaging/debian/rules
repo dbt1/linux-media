@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+
+MODULE := @MODULE@
+PACKAGE := @PACKAGE@
+VERSION := @VERSION@
+
+DEST := debian/$(PACKAGE)/usr/src/$(MODULE)-$(VERSION)
+
+%:
+	dh $@ --with dkms
+
+# The module sources must not be compiled at package build time: they are
+# built by DKMS on the target host, against that host's kernel.
+override_dh_auto_configure:
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_auto_clean:
+
+# dh_dkms installs dkms.conf; everything else has to be staged explicitly.
+override_dh_auto_install:
+	mkdir -p $(DEST)
+	tar -cf - --exclude=./debian --exclude=./dkms.conf . | tar -xf - -C $(DEST)
+
+override_dh_dkms:
+	dh_dkms -V $(VERSION)

@@ -50,8 +50,10 @@ und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
 
 ## Wichtige Hinweise
 
-- Keine Installation nach `/lib/modules` und kein `make install`.
+- Der Tarball-Weg (`make package`) installiert nichts nach `/lib/modules`.
+  Der DKMS-Weg tut es bewusst -- siehe *Rebuild automatisieren (DKMS)*.
 - Module sind kernel-spezifisch und gelten nur fuer den exakt gleichen KVER.
+  Genau deshalb gibt es den DKMS-Weg.
 - Secure Boot: Unsigned Modules muessen erlaubt sein.
 
 ## Kernel-Update (Rebuild)
@@ -88,49 +90,77 @@ Nach einem Kernel-Update ohne Rebuild:
 Das ist kein Treiberdefekt: Der Loader verweigert bewusst das Laden inkompatibler
 Module. Der Fix ist der Rebuild oben, nicht `rmmod`/`modprobe`.
 
-## Rebuild automatisieren (Vorschlaege, noch nicht umgesetzt)
+## Rebuild automatisieren (DKMS)
 
-Status: offen (Stand 2026-07-12). Der Rebuild ist heute manuell. Folge: Der Tuner
-ist nach jedem Kernel-Update weg, bis jemand ihn von Hand neu baut.
+Umgesetzt (Stand 2026-08-23). DKMS baut die Module bei jedem Kernel-Update
+automatisch mit, auch bei unbeaufsichtigten apt-Upgrades. `modprobe` und udev
+laden sie dann selbst -- `tbs5580-modules.service` und `load-tbs5580.sh` werden
+nicht mehr gebraucht.
 
-### Voraussetzung fuer beide Optionen: Header-Metapaket
-
-`linux-image-amd64` ist installiert, `linux-headers-amd64` nicht. Neue Kernel
-kommen also automatisch, die passenden Header nicht. Damit ist nach einem Update
-nicht einmal ein Rebuild moeglich, bis die Header nachinstalliert sind.
+### Voraussetzung: Header-Metapaket
 
 ```
 sudo apt install linux-headers-amd64
 ```
 
-Das ist unabhaengig von Option A/B sinnvoll und Voraussetzung fuer beide.
+Ohne das kommen neue Kernel automatisch (`linux-image-amd64`), die passenden
+Header aber nicht -- und DKMS scheitert dann still. Das ist die haeufigste
+Ursache dafuer, dass der Tuner nach einem Update trotzdem weg ist.
 
-### Option A: DKMS (robust)
-
-Das Kernel-Update baut die Module automatisch mit, auch bei unbeaufsichtigten
-apt-Upgrades, und erlaubt Modulsignatur fuer Secure Boot.
-
-- Braucht ein `dkms.conf` je Profil und die Sourcen unter `/usr/src/<name>-<ver>`
-- Bricht mit dem Repo-Prinzip "keine Installation nach `/lib/modules`"
-- `tbs5580-modules.service` und `load-tbs5580.sh` wuerden entfallen (`modprobe` genuegt)
-
-### Option B: Kernel-Postinst-Hook (leichtgewichtig)
-
-Behaelt das Repo-Prinzip (Module bleiben in `out/`) und ruft nur den vorhandenen
-Rebuild auf. Skizze `/etc/kernel/postinst.d/zz-linux-media`:
+### Einrichten
 
 ```
-#!/bin/sh
-set -e
-KVER="$1"
-[ -n "$KVER" ] || exit 0
-[ -d "/lib/modules/$KVER/build" ] || exit 0
-su - tg -c "KVER=$KVER /home/tg/sources/linux-media/scripts/tbs5580/rebuild.sh"
+make dkms-source PROFILE=tbs5580
+sudo dkms add     -m linux-media-tbs5580 -v $(cat VERSION)
+sudo dkms install -m linux-media-tbs5580 -v $(cat VERSION)
 ```
 
-- Laeuft als root und muss fuer den Build in den User-Kontext wechseln
-- Schlaegt still fehl, wenn die Header fehlen (siehe Voraussetzung oben)
-- Keine Modulsignatur, Secure Boot bleibt Handarbeit
+`make dkms-source` erzeugt unter `out/dkms/<paket>-<version>/` einen
+eigenstaendigen Quellbaum: `dkms.conf`, ein Wrapper-Makefile, die gemeinsame
+`mk/build-modules.mk` und die noetigen Treiberquellen (nur die Dateien der im
+Profil genannten Verzeichnisse, ca. 9 MB). Alle Pfade und Modulnamen kommen aus
+`profiles/<name>.mk`, das Target ist also nicht auf `tbs5580` festgelegt.
+
+Der Snapshot wird nur erzeugt, wenn `linux_media` sauber ist, auf einem
+Nachfahren von `LINUX_MEDIA_REF` steht und die Patch-Serie des Profils
+tatsaechlich angewendet ist. Sonst bricht das Target ab -- ein nicht
+reproduzierbarer Baum soll nicht ins Paket wandern. Was genau drin ist, steht
+in `PROVENANCE`.
+
+### Ausliefern
+
+```
+sudo apt install debhelper dh-dkms
+make dkms-deb PROFILE=tbs5580
+```
+
+Ergebnis: `out/dist/linux-media-tbs5580-dkms_<version>_all.deb`. Das Paket
+haengt hart an `dkms` und an einem Header-Metapaket
+(`linux-headers-amd64 | linux-headers-generic`), damit auf dem Zielrechner
+nicht derselbe Zustand entsteht. Die Tuner-Firmware ist proprietaer und darf
+nicht mitgeliefert werden; das `postinst` warnt bei Abwesenheit, Details in
+`README.Debian`.
+
+Die Debian-Vorlagen liegen unter `packaging/debian/` und werden beim Bauen mit
+Profil, Version, Maintainer und Firmwareliste gefuellt.
+
+### Was das kostet
+
+DKMS installiert nach `/lib/modules/<KVER>/updates/dkms/`. Das gibt das
+urspruengliche Prinzip "keine Installation nach `/lib/modules`" bewusst auf.
+`updates/dkms` rangiert vor `kernel/`, die Module ueberschreiben also
+gleichnamige In-Tree-Module fuer *alle* Geraete, die sie nutzen -- bei
+`tbs5580` betrifft das `dvb-usb`, bei `t230`/`t210` zusaetzlich `si2168` und
+`si2157`. Auf einem Host mit weiterer DVB-Hardware vorher pruefen.
+
+Der `out/`-Tarball-Weg (`make package`) bleibt unveraendert als Fallback fuer
+Hosts ohne DKMS.
+
+### Verworfene Alternative
+
+Ein Kernel-Postinst-Hook (`/etc/kernel/postinst.d/`) haette das `out/`-Prinzip
+behalten, muesste aber aus root in den User-Kontext wechseln, scheitert ohne
+Header still und taugt nicht zum Ausliefern. Deshalb DKMS.
 
 ## Ein neues Tuner-Profil hinzufuegen
 
@@ -148,9 +178,13 @@ Beispiel-Variablen im Profil:
 
 - `profiles/`  Profile pro Tuner
 - `patches/`   Patch-Serien pro Tuner
+- `mk/`        Gemeinsame Make-Fragmente (`build-modules.mk`)
+- `packaging/debian/`  Vorlagen fuer das DKMS-`.deb`
 - `scripts/`   Versionierte Helfer, z. B. `scripts/tbs5580/rebuild.sh`
+- `VERSION`    Version des DKMS-Pakets
 - `out/<profil>/`  Generierte Build-Artefakte, Loader und Logs
-- `out/dist/`  Pakete (tar.xz) pro Profil/KVER
+- `out/dkms/`  Generierte DKMS-Quellbaeume pro Profil/Version
+- `out/dist/`  Pakete (tar.xz pro Profil/KVER, `.deb` pro Profil/Version)
 
 Details zur Ablage von Hilfsskripten stehen in `scripts/README.md`.
 

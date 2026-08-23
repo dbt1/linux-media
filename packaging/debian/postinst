@@ -1,0 +1,28 @@
+#!/bin/sh
+set -e
+
+FIRMWARE="@FIRMWARE_FILES@"
+
+if [ "$1" = "configure" ] && [ -n "$FIRMWARE" ]; then
+	missing=""
+	for f in $FIRMWARE; do
+		if [ -f "/lib/firmware/$f" ]; then
+			missing=""
+			break
+		fi
+		missing="$missing $f"
+	done
+	if [ -n "$missing" ]; then
+		echo "@PACKAGE@: no usable firmware found in /lib/firmware." >&2
+		echo "@PACKAGE@: it is proprietary and cannot be shipped here." >&2
+		echo "@PACKAGE@: the tuner will not create /dev/dvb without one of:" >&2
+		for f in $FIRMWARE; do
+			echo "@PACKAGE@:   $f" >&2
+		done
+		echo "@PACKAGE@: see /usr/share/doc/@PACKAGE@/README.Debian" >&2
+	fi
+fi
+
+#DEBHELPER#
+
+exit 0
