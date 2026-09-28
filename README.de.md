@@ -68,7 +68,8 @@ und meldet moegliche Blacklists (modprobe.d, Kernel-Parameter).
 - Secure Boot: Der Tarball-Weg liefert unsignierte Module, die erlaubt sein
   muessen. Der DKMS-Weg signiert dagegen mit einem selbst erzeugten Schluessel
   (`/var/lib/dkms/mok.key`); dort ist statt dessen das MOK-Enrolment noetig:
-  `sudo mokutil --import /var/lib/dkms/mok.pub`.
+  `sudo mokutil --import /var/lib/dkms/mok.pub`. Das gilt auch, wenn Secure
+  Boot erst spaeter eingeschaltet wird -- siehe *Symptome: Tuner fehlt*.
 
 ## Kernel-Update (Rebuild, nur Tarball-Fallback)
 
@@ -97,22 +98,41 @@ aelteren Fassung dieses Repos benutzt, startet statt dessen sie neu.
 Hinweis: Kernel-Header muessen zum laufenden Kernel installiert sein
 (`linux-headers-$KVER`).
 
-## Symptome eines fehlenden Rebuilds
+## Symptome: Tuner fehlt
 
-Nach einem Kernel-Update ohne Rebuild:
+Das Bild ist immer gleich: `/dev/dvb` fehlt komplett, Neutrino startet ohne
+Tuner, `lsmod` zeigt `dvb_core` (ggf. `si2157`, `i2c_mux`), aber kein
+`dvb_usb_tbs5580`. Zuerst mit `lsusb -d <USB_ID>` pruefen, ob der Stick
+ueberhaupt steckt. Danach die Ursachen in dieser Reihenfolge:
 
-- `/dev/dvb` fehlt komplett, Neutrino startet ohne Tuner
-- `lsmod` zeigt nur `dvb_core` (ggf. `si2157`), kein `dvb_usb_tbs5580`
-- `modinfo -F vermagic out/<profil>/*.ko` != `uname -r`
+1. **DKMS hat fuer den laufenden Kernel nicht gebaut.** `dkms status` hat
+   keinen `installed`-Eintrag fuer `uname -r`. Meist fehlen die Header, siehe
+   *Voraussetzung: Header-Metapaket*. Danach
+   `sudo dkms autoinstall -k $(uname -r)` und `sudo modprobe dvb_usb_tbs5580`.
+2. **Secure Boot lehnt die DKMS-Module ab.** `dkms status` meldet
+   `installed`, aber `mokutil --sb-state` meldet `SecureBoot enabled` und
+   `mokutil --test-key /var/lib/dkms/mok.pub` meldet `is not enrolled`.
+   Kennzeichen: Die In-Tree-Module (`mc`, `dvb_core`, `rc_core`) sind geladen,
+   alle Module aus `updates/dkms/` fehlen. Ein Rebuild aendert daran nichts,
+   denn DKMS signiert wieder mit demselben Schluessel. Fix: einmalig
+   `sudo mokutil --import /var/lib/dkms/mok.pub`, neu starten und im
+   MokManager (blauer Bildschirm, 10 s Zeit) "Enroll MOK" bestaetigen. Danach
+   gilt es fuer jeden kuenftigen Kernel. Typischer Ausloeser: Secure Boot wurde
+   nachtraeglich eingeschaltet, etwa fuer ein Windows im Dual-Boot.
+3. **Tarball-Weg ohne Rebuild.** `modinfo -F vermagic out/<profil>/*.ko` !=
+   `uname -r`. Das ist nur auf Hosts ohne DKMS aussagekraeftig; mit DKMS wird
+   `out/` nicht mehr gebaut und passt nach jedem Kernel-Update nicht.
 
 Auf Hosts, die noch nach der alten Anleitung eingerichtet sind, zusaetzlich:
 `systemctl status tbs5580-modules.service` -> `failed` mit ExecStart Exit 1,
 und `load-tbs5580.sh` bricht in `check_vermagic` ab (`vermagic mismatch for
 <KVER>`). Unit und Loader stammen aus einer aelteren Fassung dieses Repos und
-werden hier nicht mehr erzeugt.
+werden hier nicht mehr erzeugt. Unter Secure Boot kann dieser Weg ohnehin nicht
+laden: Die `out/`-Module sind unsigniert.
 
-Das ist kein Treiberdefekt: Der Loader verweigert bewusst das Laden inkompatibler
-Module. Der Fix ist der Rebuild oben, nicht `rmmod`/`modprobe`.
+In keinem der Faelle ist es ein Treiberdefekt, und `rmmod`/`modprobe` ist nicht
+der Fix. `dmesg` hilft ohne root meist nicht weiter
+(`kernel.dmesg_restrict=1`): leere Ausgabe heisst nicht "keine Fehler".
 
 ## Rebuild automatisieren (DKMS)
 
